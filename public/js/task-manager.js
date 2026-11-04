@@ -1,51 +1,15 @@
 import { downloadCsv } from './csv.js';
+import { apiFetch } from './api.js';
 
-const taskStorageKey = 'pulse.tasks';
 let tasks = [];
 let editingTaskId = null;
 
-try {
-  const savedTasks = JSON.parse(localStorage.getItem(taskStorageKey) || '[]');
-  if (Array.isArray(savedTasks)) {
-    tasks = savedTasks
-      .filter(
-        (task) =>
-          task &&
-          typeof task.id === 'string' &&
-          typeof task.title === 'string' &&
-          ['todo', 'in-progress', 'done'].includes(task.status) &&
-          ['low', 'normal', 'high', 'urgent'].includes(task.priority) &&
-          (!task.dueDate ||
-            (typeof task.dueDate === 'string' &&
-              !Number.isNaN(Date.parse(`${task.dueDate}T00:00:00`)))),
-      )
-      .map((task) => ({
-        ...task,
-        description: typeof task.description === 'string' ? task.description : '',
-        category: typeof task.category === 'string' ? task.category : '',
-        dueDate: typeof task.dueDate === 'string' ? task.dueDate : '',
-      }));
-  }
-} catch (error) {
-  console.warn('Unable to load saved tasks:', error);
-}
-
-function persistTasks() {
-  const storageStatus = document.getElementById('task-result-count');
-  try {
-    localStorage.setItem(taskStorageKey, JSON.stringify(tasks));
-    storageStatus.textContent = `${tasks.filter((task) => task.status !== 'done').length} open · saved locally`;
-    storageStatus.removeAttribute('data-error');
-  } catch (error) {
-    console.error('Unable to save tasks:', error);
-    storageStatus.textContent = 'Could not save tasks in this browser';
-    storageStatus.dataset.error = 'true';
-    return false;
-  }
-  return true;
+function announceTaskChange() {
+  window.dispatchEvent(new Event('pulse:audit-updated'));
 }
 
 function renderTasks() {
+  document.getElementById('task-result-count').removeAttribute('data-error');
   const query = document.getElementById('task-search').value.trim().toLocaleLowerCase();
   const priorityFilter = document.getElementById('task-priority-filter').value;
   const filtered = tasks.filter((task) => {
@@ -222,7 +186,7 @@ function showTaskForm(task) {
   form.elements.title.focus();
 }
 
-export function initializeTaskManager() {
+export async function initializeTaskManager() {
   document.getElementById('new-task-button').addEventListener('click', () => showTaskForm());
   document.getElementById('close-task-dialog').addEventListener('click', () => {
     document.getElementById('task-dialog').close();
@@ -230,12 +194,11 @@ export function initializeTaskManager() {
   document.getElementById('cancel-task-dialog').addEventListener('click', () => {
     document.getElementById('task-dialog').close();
   });
-  document.getElementById('task-form').addEventListener('submit', (event) => {
+  document.getElementById('task-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = document.getElementById('task-form');
     const formData = new FormData(form);
     const updatedTask = {
-      id: editingTaskId ?? crypto.randomUUID(),
       title: String(formData.get('title') || '').trim(),
       description: String(formData.get('description') || '').trim(),
       priority: String(formData.get('priority')),
@@ -248,30 +211,52 @@ export function initializeTaskManager() {
       return;
     }
 
-    if (editingTaskId) {
-      tasks = tasks.map((task) => (task.id === editingTaskId ? updatedTask : task));
-    } else {
-      tasks.unshift(updatedTask);
+    try {
+      const savedTask = await apiFetch(
+        editingTaskId ? `/api/tasks/${encodeURIComponent(editingTaskId)}` : '/api/tasks',
+        {
+          method: editingTaskId ? 'PATCH' : 'POST',
+          body: JSON.stringify(updatedTask),
+        },
+      );
+      if (editingTaskId) {
+        tasks = tasks.map((task) => (task.id === editingTaskId ? savedTask : task));
+      } else {
+        tasks.unshift(savedTask);
+      }
+      renderTasks();
+      document.getElementById('task-dialog').close();
+      announceTaskChange();
+    } catch (error) {
+      const status = document.getElementById('task-result-count');
+      status.textContent = error.message;
+      status.dataset.error = 'true';
     }
-    persistTasks();
-    renderTasks();
-    document.getElementById('task-dialog').close();
   });
   document.getElementById('task-search').addEventListener('input', renderTasks);
   document.getElementById('task-priority-filter').addEventListener('change', renderTasks);
 
   const taskBoard = document.querySelector('.task-board');
-  taskBoard.addEventListener('change', (event) => {
+  taskBoard.addEventListener('change', async (event) => {
     const select = event.target.closest('select[data-action="status"]');
     if (!select) return;
     const card = select.closest('[data-task-id]');
-    tasks = tasks.map((task) =>
-      task.id === card.dataset.taskId ? { ...task, status: select.value } : task,
-    );
-    persistTasks();
-    renderTasks();
+    const task = tasks.find((item) => item.id === card.dataset.taskId);
+    if (!task) return;
+    try {
+      const updated = await apiFetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ...task, status: select.value }),
+      });
+      tasks = tasks.map((item) => (item.id === task.id ? updated : item));
+      renderTasks();
+      announceTaskChange();
+    } catch (error) {
+      document.getElementById('task-result-count').textContent = error.message;
+      select.value = task.status;
+    }
   });
-  taskBoard.addEventListener('click', (event) => {
+  taskBoard.addEventListener('click', async (event) => {
     const button = event.target.closest('button[data-action]');
     if (!button) return;
     if (button.dataset.action === 'new-task') {
@@ -285,9 +270,14 @@ export function initializeTaskManager() {
     if (button.dataset.action === 'edit') {
       showTaskForm(task);
     } else if (button.dataset.action === 'delete' && window.confirm(`Delete “${task.title}”?`)) {
-      tasks = tasks.filter((item) => item.id !== task.id);
-      persistTasks();
-      renderTasks();
+      try {
+        await apiFetch(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'DELETE' });
+        tasks = tasks.filter((item) => item.id !== task.id);
+        renderTasks();
+        announceTaskChange();
+      } catch (error) {
+        document.getElementById('task-result-count').textContent = error.message;
+      }
     }
   });
   document.getElementById('export-tasks-button').addEventListener('click', () => {
@@ -310,5 +300,11 @@ export function initializeTaskManager() {
       'pulse-tasks.csv',
     );
   });
-  renderTasks();
+  try {
+    tasks = await apiFetch('/api/tasks');
+    renderTasks();
+  } catch (error) {
+    document.getElementById('task-result-count').textContent = error.message;
+    document.getElementById('task-result-count').dataset.error = 'true';
+  }
 }

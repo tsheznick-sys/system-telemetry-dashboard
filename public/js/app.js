@@ -1,4 +1,5 @@
 import { downloadCsv } from './csv.js';
+import { apiFetch } from './api.js';
 import { initializeTaskManager } from './task-manager.js';
 
 const status = document.getElementById('status');
@@ -8,8 +9,6 @@ const filters = document.querySelector('.filters');
 const searchInput = document.getElementById('log-search');
 const thresholdDialog = document.getElementById('threshold-dialog');
 const thresholdForm = document.getElementById('threshold-form');
-const historyStorageKey = 'pulse.telemetry.history';
-const thresholdStorageKey = 'pulse.telemetry.thresholds';
 const maxHistorySamples = 1000;
 const metricOptions = {
   cpuUsage: { label: 'CPU utilization', unit: '%', color: '#66e3d2', max: 100 },
@@ -26,49 +25,7 @@ let activeRange = 60;
 let thresholds = { ...defaultThresholds };
 let lastMetrics = null;
 let requestInProgress = false;
-
-try {
-  const savedHistory = JSON.parse(localStorage.getItem(historyStorageKey) || '[]');
-  if (Array.isArray(savedHistory)) {
-    historyPoints = savedHistory
-      .filter(
-        (point) =>
-          point &&
-          Number.isFinite(point.timestamp) &&
-          Number.isFinite(point.cpuUsage) &&
-          Number.isFinite(point.memoryUsage) &&
-          Number.isFinite(point.activeConnections) &&
-          Number.isFinite(point.errorRate),
-      )
-      .slice(-maxHistorySamples);
-  }
-} catch (error) {
-  console.warn('Unable to load saved telemetry history:', error);
-}
-
-try {
-  const savedThresholds = JSON.parse(localStorage.getItem(thresholdStorageKey) || 'null');
-  if (
-    savedThresholds &&
-    ['cpu', 'memory', 'errors'].every((key) => Number.isFinite(savedThresholds[key]))
-  ) {
-    thresholds = {
-      cpu: Math.min(100, Math.max(1, savedThresholds.cpu)),
-      memory: Math.min(100, Math.max(1, savedThresholds.memory)),
-      errors: Math.min(100, Math.max(0.01, savedThresholds.errors)),
-    };
-  }
-} catch (error) {
-  console.warn('Unable to load saved alert thresholds:', error);
-}
-
-function saveHistory() {
-  try {
-    localStorage.setItem(historyStorageKey, JSON.stringify(historyPoints));
-  } catch (error) {
-    console.warn('Unable to save telemetry history:', error);
-  }
-}
+let workspaceStarted = false;
 
 function renderChart() {
   const metric = metricOptions[activeMetric];
@@ -239,12 +196,7 @@ async function fetchTelemetry() {
 
   const startedAt = performance.now();
   try {
-    const response = await fetch('/api/telemetry');
-    if (!response.ok) {
-      throw new Error(`Telemetry request failed: ${response.status}`);
-    }
-
-    const data = await response.json();
+    const data = await apiFetch('/api/telemetry');
     const { cpuUsage, memoryUsage, activeConnections, errorRate } = data.metrics;
     lastMetrics = { cpuUsage, memoryUsage, activeConnections, errorRate };
     updateMetric('cpu', cpuUsage, 'cpu-bar', cpuUsage, 'cpu-foot', 'Current load');
@@ -277,7 +229,6 @@ async function fetchTelemetry() {
     if (Number.isFinite(sample.timestamp)) {
       historyPoints.push(sample);
       historyPoints = historyPoints.slice(-maxHistorySamples);
-      saveHistory();
       renderChart();
     }
     document.getElementById('active-node').textContent = data.activeNode;
@@ -353,7 +304,7 @@ document
 document
   .getElementById('cancel-thresholds')
   .addEventListener('click', () => thresholdDialog.close());
-thresholdForm.addEventListener('submit', (event) => {
+thresholdForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const nextThresholds = {
     cpu: Number(thresholdForm.elements.cpu.value),
@@ -364,12 +315,16 @@ thresholdForm.addEventListener('submit', (event) => {
     thresholdForm.reportValidity();
     return;
   }
-  thresholds = nextThresholds;
   try {
-    localStorage.setItem(thresholdStorageKey, JSON.stringify(thresholds));
+    thresholds = await apiFetch('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify(nextThresholds),
+    });
   } catch (error) {
-    console.warn('Unable to save alert thresholds:', error);
+    document.getElementById('status-detail').textContent = error.message;
+    return;
   }
+  window.dispatchEvent(new Event('pulse:audit-updated'));
   if (lastMetrics) renderAlerts(lastMetrics);
   thresholdDialog.close();
 });
@@ -413,7 +368,68 @@ document.querySelectorAll('[data-view]').forEach((button) => {
   });
 });
 
+async function startWorkspace() {
+  if (workspaceStarted) return;
+  workspaceStarted = true;
+  try {
+    const [history, events, savedThresholds, auditEvents] = await Promise.all([
+      apiFetch('/api/telemetry/history?limit=1000'),
+      apiFetch('/api/events?limit=50'),
+      apiFetch('/api/settings'),
+      apiFetch('/api/audit?limit=50'),
+    ]);
+    historyPoints = history.slice(-maxHistorySamples);
+    eventHistory = events;
+    thresholds = savedThresholds;
+    renderChart();
+    renderLogs();
+    renderAudit(auditEvents);
+    initializeTaskManager();
+    fetchTelemetry();
+    window.setInterval(fetchTelemetry, 30_000);
+  } catch (error) {
+    console.error('Unable to load account workspace:', error);
+    status.dataset.state = 'error';
+    status.querySelector('.status-label').textContent = 'Workspace unavailable';
+    document.getElementById('status-detail').textContent = error.message;
+    workspaceStarted = false;
+  }
+}
+
+function renderAudit(events) {
+  const container = document.getElementById('audit-events');
+  if (!events.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No account changes recorded yet.';
+    container.replaceChildren(empty);
+    return;
+  }
+  container.replaceChildren(
+    ...events.map((event) => {
+      const row = document.createElement('div');
+      row.className = 'audit-row';
+      const action = document.createElement('span');
+      action.className = 'audit-action';
+      action.textContent = event.action;
+      const resource = document.createElement('span');
+      resource.textContent = `${event.resourceType}${event.resourceId ? ` · ${event.resourceId}` : ''}`;
+      const time = document.createElement('time');
+      time.className = 'audit-time';
+      time.dateTime = event.occurredAt;
+      time.textContent = new Date(event.occurredAt).toLocaleString();
+      row.append(action, resource, time);
+      return row;
+    }),
+  );
+}
+
 renderChart();
-initializeTaskManager();
-fetchTelemetry();
-window.setInterval(fetchTelemetry, 2500);
+window.addEventListener('pulse:authenticated', startWorkspace);
+window.addEventListener('pulse:audit-updated', async () => {
+  try {
+    renderAudit(await apiFetch('/api/audit?limit=50'));
+  } catch (error) {
+    console.error('Unable to refresh audit history:', error);
+  }
+});

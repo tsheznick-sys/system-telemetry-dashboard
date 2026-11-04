@@ -1,40 +1,60 @@
 import 'dotenv/config';
-import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { faker } from '@faker-js/faker';
+import { fromNodeHeaders, toNodeHandler } from 'better-auth/node';
+import { auth, resolveSession } from './auth.js';
+import { createApp } from './app.js';
+import { config } from './config.js';
+import { pool } from './db/pool.js';
+import { cleanupExpiredData } from './db/retention.js';
 
-const app = express();
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-app.use(express.json());
-app.use(express.static(path.join(projectRoot, 'public')));
-
-app.get('/api/telemetry', (_req, res) => {
-  const telemetryData = {
-    timestamp: new Date().toISOString(),
-    metrics: {
-      cpuUsage: faker.number.float({ min: 10, max: 95, fractionDigits: 1 }),
-      memoryUsage: faker.number.float({ min: 30, max: 85, fractionDigits: 1 }),
-      activeConnections: faker.number.int({ min: 1200, max: 4500 }),
-      errorRate: faker.number.float({ min: 0, max: 1.5, fractionDigits: 2 }),
-    },
-    activeNode: faker.system.networkInterface(),
-    recentLogs: Array.from({ length: 5 }, () => ({
-      id: faker.string.uuid(),
-      level: faker.helpers.arrayElement(['INFO', 'WARN', 'SUCCESS', 'DEBUG']),
-      message: faker.hacker.phrase(),
-      time: faker.date.recent().toLocaleTimeString(),
-    })),
-  };
-
-  res.json(telemetryData);
+const app = createApp({
+  pool,
+  resolveSession,
+  authHandler: toNodeHandler(auth),
+  registerSsoProvider: (body, headers) =>
+    auth.api.registerSSOProvider({ body, headers: fromNodeHeaders(headers) }),
 });
 
+async function startServer() {
+  const { rows } = await pool.query(
+    `SELECT to_regclass('"user"') AS auth_users, to_regclass('tasks') AS tasks`,
+  );
+  if (!rows[0].auth_users || !rows[0].tasks) {
+    throw new Error('Database migrations are missing. Run npm run db:migrate before starting.');
+  }
+  const server = app.listen(config.port, () => {
+    console.log(`Pulse Compute Operations listening on port ${config.port}.`);
+  });
+  const cleanup = async () => {
+    try {
+      const { samples, events } = await cleanupExpiredData(pool);
+      if (samples || events) {
+        console.info(`30-day retention removed ${samples} telemetry samples and ${events} events.`);
+      }
+    } catch (error) {
+      console.error('30-day retention cleanup failed:', error);
+    }
+  };
+  const retentionTimer = setInterval(cleanup, 24 * 60 * 60 * 1000);
+  retentionTimer.unref();
+  await cleanup();
+
+  const shutdown = () => {
+    clearInterval(retentionTimer);
+    server.close(() => {
+      void pool.end();
+    });
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const port = Number(process.env.PORT ?? 3000);
-  app.listen(port, () => {
-    console.log(`Cloud Telemetry Engine running on port ${port}`);
+  startServer().catch(async (error: unknown) => {
+    console.error('Unable to start Pulse Compute Operations:', error);
+    await pool.end();
+    process.exitCode = 1;
   });
 }
 
