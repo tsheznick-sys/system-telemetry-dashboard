@@ -3,6 +3,9 @@
 .spago
 bower_components
 node_modules
+dist/
+.env
+coverage/
 
 # Generated files
 .psci
