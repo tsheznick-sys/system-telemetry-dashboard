@@ -1,6 +1,6 @@
-# Ghost Telemetry Engine 3.0
+# Ghost Telemetry Engine 4.0
 
-Telemetry 3.0 combines a Python host monitor and Gradio 6 dashboard with a
+Telemetry 4.0 combines a Python host monitor and Gradio 6 dashboard with a
 Flutter client for Android, iOS, and web. Both interfaces use the same versioned
 JSON API. Live measurements describe the machine running the Python service;
 the simulated mode is available for demos and UI checks.
@@ -23,6 +23,7 @@ Configuration:
 | Environment variable | Default | Description |
 | --- | --- | --- |
 | `TELEMETRY_CORS_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000` | Comma-separated browser origins allowed to call the API. Use the exact Flutter web origin. |
+| `TELEMETRY_DB_PATH` | `~/.local/share/ghost-telemetry/telemetry.sqlite3` | SQLite database path used for durable telemetry history. Parent directories are created automatically. |
 
 The app binds to all container interfaces to support forwarded ports. Its API
 has **no authentication or TLS**. Do not expose it publicly or to an untrusted
@@ -39,7 +40,7 @@ The telemetry API's OpenAPI schema is available at
 | `GET /gradio_api/api/v1/health` | Service version and health. |
 | `GET /gradio_api/api/v1/metrics?mode=live` | Collect and return a current host sample. |
 | `GET /gradio_api/api/v1/metrics?mode=simulated` | Generate a demo sample. |
-| `GET /gradio_api/api/v1/history?mode=live&limit=120` | Return recent in-memory samples for one mode. `limit` is 1–600. |
+| `GET /gradio_api/api/v1/history?mode=live&limit=120` | Return recent persisted samples for one mode. `limit` is 1–600. |
 | `GET /gradio_api/api/v1/export.csv?mode=live&limit=120` | Download recent samples as CSV. |
 
 Each metrics response includes an ISO-8601 UTC timestamp, mode, host identity,
@@ -48,8 +49,9 @@ average when supported, threshold alerts, and events. Live error rate is
 `null`: the host service does not instrument application requests. Active
 connection counts can also be `null` on operating systems or permission levels
 that do not allow enumerating sockets; the response includes an availability
-flag and an explanation. History is kept in memory (up to 600 samples) and is
-cleared when the service restarts.
+flag and an explanation. History is written to SQLite and survives service
+restarts. The database retains the latest 10,000 samples across both telemetry
+modes, while each API request returns at most 600.
 
 The Gradio dashboard at `/` streams an asynchronous update on each timer tick.
 It can switch between live and simulated telemetry, adjust independent CPU and
@@ -57,6 +59,7 @@ memory alert thresholds, select Normal Operations, Load Test, or Simulated
 Incident profiles, adjust its sample window and refresh interval, display
 interactive Plotly trends, and export the chart data. Operational profiles only
 affect simulated samples; they never create artificial load on the host.
+The dashboard uses the same durable history as the API and Flutter client.
 
 Run the Python API and dashboard tests with:
 

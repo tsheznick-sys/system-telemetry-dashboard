@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import json
 import os
 import platform
 import random
+import sqlite3
 import socket
 import threading
 import time
-from collections import deque
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Literal
@@ -23,8 +25,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from gradio.routes import App as GradioApp
 from pydantic import BaseModel
 
-APP_VERSION = "3.0.0"
+APP_VERSION = "4.0.0"
 HISTORY_CAPACITY = 600
+PERSISTED_HISTORY_CAPACITY = 10_000
 TelemetryMode = Literal["live", "simulated"]
 OperationalState = Literal[
     "Normal Operations", "Load Test", "Simulated Incident"
@@ -83,12 +86,71 @@ def _alerts_for(cpu: float, memory: float, disk: float) -> list[str]:
 
 
 class TelemetryCollector:
-    def __init__(self) -> None:
-        self._history: deque[TelemetrySnapshot] = deque(maxlen=HISTORY_CAPACITY)
+    def __init__(self, history_db_path: str | Path | None = None) -> None:
+        default_path = (
+            Path.home()
+            / ".local"
+            / "share"
+            / "ghost-telemetry"
+            / "telemetry.sqlite3"
+        )
+        configured_path = history_db_path or os.getenv(
+            "TELEMETRY_DB_PATH", str(default_path)
+        )
+        self.history_db_path = Path(configured_path).expanduser()
         self._history_lock = threading.Lock()
         self._network_lock = threading.Lock()
         self._random = random.Random()
         self._last_network: tuple[float, int, int] | None = None
+        self._initialize_history()
+
+    def _connect(self) -> sqlite3.Connection:
+        self.history_db_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.history_db_path, timeout=5)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize_history(self) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telemetry_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    mode TEXT NOT NULL CHECK (mode IN ('live', 'simulated')),
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_telemetry_history_mode_id
+                ON telemetry_history (mode, id DESC)
+                """
+            )
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
+
+    def _record(self, sample: TelemetrySnapshot) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO telemetry_history (timestamp, mode, payload)
+                VALUES (?, ?, ?)
+                """,
+                (sample.timestamp, sample.mode, sample.model_dump_json()),
+            )
+            connection.execute(
+                """
+                DELETE FROM telemetry_history
+                WHERE id NOT IN (
+                    SELECT id FROM telemetry_history
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                """,
+                (PERSISTED_HISTORY_CAPACITY,),
+            )
 
     def snapshot(
         self,
@@ -98,23 +160,35 @@ class TelemetryCollector:
         if mode == "simulated":
             with self._history_lock:
                 sample = self._simulated_snapshot(operational_state)
-                self._history.append(sample)
+                self._record(sample)
                 return sample
 
         sample = self._live_snapshot()
         with self._history_lock:
-            self._history.append(sample)
+            self._record(sample)
         return sample
 
     def history(self, mode: TelemetryMode, limit: int) -> list[TelemetrySnapshot]:
         with self._history_lock:
-            matching = [sample for sample in self._history if sample.mode == mode]
-        matching.sort(key=lambda sample: sample.timestamp)
-        return matching[-limit:]
+            with closing(self._connect()) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT payload FROM telemetry_history
+                    WHERE mode = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (mode, min(max(limit, 1), HISTORY_CAPACITY)),
+                ).fetchall()
+        return [
+            TelemetrySnapshot.model_validate_json(row["payload"])
+            for row in reversed(rows)
+        ]
 
     def clear_history(self) -> None:
         with self._history_lock:
-            self._history.clear()
+            with closing(self._connect()) as connection, connection:
+                connection.execute("DELETE FROM telemetry_history")
 
     def _network_rates(self, sent_bytes: int, recv_bytes: int) -> tuple[float, float]:
         now = time.monotonic()
@@ -255,8 +329,8 @@ class TelemetryCollector:
 
 collector = TelemetryCollector()
 app = GradioApp(
-    title="System Telemetry API",
-    description="Live host and simulated telemetry for System Telemetry Dashboard.",
+    title="Ghost Telemetry API",
+    description="Persistent live host and simulated telemetry for Ghost Telemetry Engine.",
     version=APP_VERSION,
 )
 
@@ -546,11 +620,11 @@ def update_refresh_interval(seconds: int) -> float:
     return float(seconds)
 
 
-with gr.Blocks(title="Ghost Telemetry Engine v3.0") as demo:
+with gr.Blocks(title="Ghost Telemetry Engine v4.0") as demo:
     gr.Markdown(
         """
-        # ⚡ GHOST TELEMETRY ENGINE <span style="color:#22d3ee">/ 3.0</span>
-        Live host diagnostics · Streaming metrics · Operational simulation profiles
+        # ⚡ GHOST TELEMETRY ENGINE <span style="color:#22d3ee">/ 4.0</span>
+        Live host diagnostics · Durable history · Operational simulation profiles
         """
     )
     with gr.Row():

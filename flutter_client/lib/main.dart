@@ -331,7 +331,7 @@ class _TelemetryHomePageState extends State<TelemetryHomePage> {
             SizedBox(width: 10),
             Text('TELEMETRY', style: TextStyle(letterSpacing: 2)),
             SizedBox(width: 8),
-            Text('3.0', style: TextStyle(color: Color(0xFF12C8C0))),
+            Text('4.0', style: TextStyle(color: Color(0xFF12C8C0))),
           ],
         ),
         actions: [

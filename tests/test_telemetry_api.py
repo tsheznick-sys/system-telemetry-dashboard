@@ -1,18 +1,21 @@
 import asyncio
 import csv
 import io
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import app as app_module
 from app import (
     APP_VERSION,
     TelemetrySnapshot,
     app,
-    collector,
     demo,
     get_telemetry,
+    TelemetryCollector,
     _render_dashboard,
 )
 
@@ -20,15 +23,21 @@ from app import (
 class TelemetryApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls.temp_directory = tempfile.TemporaryDirectory()
+        cls.collector = TelemetryCollector(
+            Path(cls.temp_directory.name) / "api-tests.sqlite3"
+        )
+        app_module.collector = cls.collector
         cls.client = TestClient(app)
         cls.client.__enter__()
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls.client.__exit__(None, None, None)
+        cls.temp_directory.cleanup()
 
     def setUp(self) -> None:
-        collector.clear_history()
+        self.collector.clear_history()
 
     def test_health_reports_api_version(self) -> None:
         response = self.client.get("/api/v1/health")
@@ -115,7 +124,7 @@ class TelemetryApiTests(unittest.TestCase):
 
         self.assertIn("timer", component_types)
         self.assertIn("plot", component_types)
-        self.assertEqual(demo.title, "Ghost Telemetry Engine v3.0")
+        self.assertEqual(demo.title, "Ghost Telemetry Engine v4.0")
 
     def test_async_dashboard_callback_streams_plot_and_metrics(self) -> None:
         async def first_update():
@@ -137,7 +146,7 @@ class TelemetryApiTests(unittest.TestCase):
         self.assertTrue(events)
 
     def test_dashboard_thresholds_control_alerts_and_event_severity(self) -> None:
-        sample = collector.snapshot("simulated")
+        sample = self.collector.snapshot("simulated")
         sample = sample.model_copy(
             update={
                 "cpu_percent": 70.0,
@@ -149,8 +158,8 @@ class TelemetryApiTests(unittest.TestCase):
             }
         )
         with (
-            patch.object(collector, "snapshot", return_value=sample),
-            patch.object(collector, "history", return_value=[sample]),
+            patch.object(self.collector, "snapshot", return_value=sample),
+            patch.object(self.collector, "history", return_value=[sample]),
         ):
             *_, summary, chart, events = _render_dashboard(
                 "simulated", 20, 60, 65, "Normal Operations"
@@ -161,6 +170,37 @@ class TelemetryApiTests(unittest.TestCase):
         self.assertIn("CRITICAL:", events)
         self.assertIn("CPU usage is high", events)
         self.assertEqual(len(chart.data), 2)
+
+    def test_history_persists_across_collector_restarts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "persistent-history.sqlite3"
+            first_process = TelemetryCollector(database_path)
+            saved_sample = first_process.snapshot("simulated")
+
+            restarted_process = TelemetryCollector(database_path)
+            restored = restarted_process.history("simulated", 10)
+
+        self.assertEqual(len(restored), 1)
+        self.assertEqual(restored[0].timestamp, saved_sample.timestamp)
+        self.assertEqual(restored[0].mode, saved_sample.mode)
+
+    def test_persistent_history_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "bounded-history.sqlite3"
+            bounded_collector = TelemetryCollector(database_path)
+            with patch.object(app_module, "PERSISTED_HISTORY_CAPACITY", 2):
+                samples = [
+                    bounded_collector.snapshot("simulated") for _ in range(3)
+                ]
+
+            restarted_process = TelemetryCollector(database_path)
+            restored = restarted_process.history("simulated", 10)
+
+        self.assertEqual(len(restored), 2)
+        self.assertEqual(
+            [sample.timestamp for sample in restored],
+            [sample.timestamp for sample in samples[-2:]],
+        )
 
 
 if __name__ == "__main__":
