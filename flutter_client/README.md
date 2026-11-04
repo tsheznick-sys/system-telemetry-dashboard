@@ -1,9 +1,9 @@
 # Telemetry Client
 
-Flutter client for the System Telemetry Dashboard 2.0 API. The client supports
+Flutter client for the Ghost Telemetry Engine 3.0 API. The client supports
 Android, iOS, and web and stores its configured server URL on the device.
 
-See [`../docs/telemetry-v2.md`](../docs/telemetry-v2.md) for backend setup, API
+See [`../docs/telemetry-v3.md`](../docs/telemetry-v3.md) for backend setup, API
 details, network access guidance, and platform-specific setup instructions.
 
 From this directory, generate the Flutter platform wrappers if they are not

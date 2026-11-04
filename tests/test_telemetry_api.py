@@ -1,10 +1,20 @@
+import asyncio
 import csv
 import io
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app import APP_VERSION, app, collector
+from app import (
+    APP_VERSION,
+    TelemetrySnapshot,
+    app,
+    collector,
+    demo,
+    get_telemetry,
+    _render_dashboard,
+)
 
 
 class TelemetryApiTests(unittest.TestCase):
@@ -18,11 +28,16 @@ class TelemetryApiTests(unittest.TestCase):
         cls.client.__exit__(None, None, None)
 
     def setUp(self) -> None:
-        with collector._lock:
-            collector._history.clear()
+        collector.clear_history()
 
     def test_health_reports_api_version(self) -> None:
         response = self.client.get("/api/v1/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok", "version": APP_VERSION})
+
+    def test_ssr_proxy_api_alias_reports_health(self) -> None:
+        response = self.client.get("/gradio_api/api/v1/health")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok", "version": APP_VERSION})
@@ -82,17 +97,70 @@ class TelemetryApiTests(unittest.TestCase):
         self.assertEqual(rows[0]["mode"], "simulated")
         self.assertIn("cpu_percent", rows[0])
 
-    def test_dashboard_redirects_to_gradio(self) -> None:
-        response = self.client.get("/", follow_redirects=False)
-
-        self.assertEqual(response.status_code, 307)
-        self.assertEqual(response.headers["location"], "/dashboard")
-
-    def test_dashboard_is_served(self) -> None:
-        response = self.client.get("/dashboard/")
+    def test_openapi_documents_versioned_telemetry_routes(self) -> None:
+        response = self.client.get("/gradio_api/api/v1/openapi.json")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Telemetry Dashboard 2.0", response.text)
+        paths = response.json()["paths"]
+        self.assertIn("/gradio_api/api/v1/health", paths)
+        self.assertIn("/gradio_api/api/v1/metrics", paths)
+        self.assertIn("/gradio_api/api/v1/history", paths)
+        self.assertIn("/gradio_api/api/v1/export.csv", paths)
+
+    def test_dashboard_config_uses_timer_and_plotly_component(self) -> None:
+        config = demo.get_config_file()
+        component_types = {
+            component["type"] for component in config["components"]
+        }
+
+        self.assertIn("timer", component_types)
+        self.assertIn("plot", component_types)
+        self.assertEqual(demo.title, "Ghost Telemetry Engine v3.0")
+
+    def test_async_dashboard_callback_streams_plot_and_metrics(self) -> None:
+        async def first_update():
+            stream = get_telemetry(
+                "simulated", 30, 80, 80, "Simulated Incident"
+            )
+            return await anext(stream)
+
+        cpu, memory, connections, error_rate, summary, chart, events = asyncio.run(
+            first_update()
+        )
+
+        self.assertGreaterEqual(cpu, 90)
+        self.assertGreaterEqual(memory, 85)
+        self.assertIsNotNone(connections)
+        self.assertGreaterEqual(error_rate, 8)
+        self.assertIn("Simulated telemetry", summary)
+        self.assertEqual(len(chart.data), 2)
+        self.assertTrue(events)
+
+    def test_dashboard_thresholds_control_alerts_and_event_severity(self) -> None:
+        sample = collector.snapshot("simulated")
+        sample = sample.model_copy(
+            update={
+                "cpu_percent": 70.0,
+                "memory_percent": 72.0,
+                "disk_percent": 20.0,
+                "error_rate_percent": 4.0,
+                "alerts": [],
+                "events": ["INFO: simulated sample"],
+            }
+        )
+        with (
+            patch.object(collector, "snapshot", return_value=sample),
+            patch.object(collector, "history", return_value=[sample]),
+        ):
+            *_, summary, chart, events = _render_dashboard(
+                "simulated", 20, 60, 65, "Normal Operations"
+            )
+
+        self.assertIn("threshold 60%", summary)
+        self.assertIn("threshold 65%", summary)
+        self.assertIn("CRITICAL:", events)
+        self.assertIn("CPU usage is high", events)
+        self.assertEqual(len(chart.data), 2)
 
 
 if __name__ == "__main__":

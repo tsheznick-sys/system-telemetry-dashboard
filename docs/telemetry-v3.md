@@ -1,9 +1,9 @@
-# System Telemetry Dashboard 2.0
+# Ghost Telemetry Engine 3.0
 
-Telemetry 2.0 combines a Python host monitor and Gradio dashboard with a Flutter
-client for Android, iOS, and web. Both interfaces use the same versioned JSON
-API. Live measurements describe the machine running the Python service; the
-simulated mode is available for demos and UI checks.
+Telemetry 3.0 combines a Python host monitor and Gradio 6 dashboard with a
+Flutter client for Android, iOS, and web. Both interfaces use the same versioned
+JSON API. Live measurements describe the machine running the Python service;
+the simulated mode is available for demos and UI checks.
 
 ## Run the Python service
 
@@ -14,35 +14,33 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-Open [http://127.0.0.1:7860](http://127.0.0.1:7860). The service binds to
-`127.0.0.1` by default, so it is only reachable from the same machine.
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860). The service listens on
+`0.0.0.0:7860` for container and Codespaces port forwarding. Keep the forwarded
+port private; the API does not provide authentication or TLS.
 
 Configuration:
 
 | Environment variable | Default | Description |
 | --- | --- | --- |
-| `TELEMETRY_HOST` | `127.0.0.1` | Uvicorn bind address. Set to `0.0.0.0` only when intentionally serving trusted private-network clients. |
-| `TELEMETRY_PORT` | `7860` | HTTP port. |
 | `TELEMETRY_CORS_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000` | Comma-separated browser origins allowed to call the API. Use the exact Flutter web origin. |
 
-For example, to make the API available to a Flutter app on a trusted local
-network, set `TELEMETRY_HOST=0.0.0.0`, allow the port through the host firewall
-only on the private network, and configure the Flutter app with the server's
-private IP address. This API has **no authentication or TLS**. Do not expose it
-to the public internet or an untrusted network; use a VPN or add an authenticated
-TLS-terminating gateway before allowing untrusted clients.
+The app binds to all container interfaces to support forwarded ports. Its API
+has **no authentication or TLS**. Do not expose it publicly or to an untrusted
+network; keep the Codespaces port private or use an authenticated TLS-terminating
+gateway before allowing untrusted clients.
 
 ## API
 
-Interactive OpenAPI documentation is available at `/docs`.
+The telemetry API's OpenAPI schema is available at
+`/gradio_api/api/v1/openapi.json`.
 
 | Method and path | Description |
 | --- | --- |
-| `GET /api/v1/health` | Service version and health. |
-| `GET /api/v1/metrics?mode=live` | Collect and return a current host sample. |
-| `GET /api/v1/metrics?mode=simulated` | Generate a demo sample. |
-| `GET /api/v1/history?mode=live&limit=120` | Return recent in-memory samples for one mode. `limit` is 1–600. |
-| `GET /api/v1/export.csv?mode=live&limit=120` | Download recent samples as CSV. |
+| `GET /gradio_api/api/v1/health` | Service version and health. |
+| `GET /gradio_api/api/v1/metrics?mode=live` | Collect and return a current host sample. |
+| `GET /gradio_api/api/v1/metrics?mode=simulated` | Generate a demo sample. |
+| `GET /gradio_api/api/v1/history?mode=live&limit=120` | Return recent in-memory samples for one mode. `limit` is 1–600. |
+| `GET /gradio_api/api/v1/export.csv?mode=live&limit=120` | Download recent samples as CSV. |
 
 Each metrics response includes an ISO-8601 UTC timestamp, mode, host identity,
 CPU, memory, disk, network throughput and totals, process count, uptime, load
@@ -53,9 +51,12 @@ that do not allow enumerating sockets; the response includes an availability
 flag and an explanation. History is kept in memory (up to 600 samples) and is
 cleared when the service restarts.
 
-The dashboard at `/dashboard` polls the same collector, can switch between live
-and simulated telemetry, adjust its sample window and refresh interval, display
-resource trends and threshold alerts, and export the chart data.
+The Gradio dashboard at `/` streams an asynchronous update on each timer tick.
+It can switch between live and simulated telemetry, adjust independent CPU and
+memory alert thresholds, select Normal Operations, Load Test, or Simulated
+Incident profiles, adjust its sample window and refresh interval, display
+interactive Plotly trends, and export the chart data. Operational profiles only
+affect simulated samples; they never create artificial load on the host.
 
 Run the Python API and dashboard tests with:
 

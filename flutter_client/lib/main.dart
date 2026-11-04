@@ -97,7 +97,8 @@ class TelemetryApi {
     Map<String, String> query = const {},
   ]) async {
     final root = baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
-    final uri = Uri.parse('$root/api/v1/$endpoint').replace(queryParameters: query);
+    final uri = Uri.parse('$root/gradio_api/api/v1/$endpoint')
+        .replace(queryParameters: query);
     final response = await http.get(uri).timeout(const Duration(seconds: 8));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw TelemetryApiException(
@@ -118,7 +119,7 @@ class TelemetryApi {
 
   Future<List<TelemetrySnapshot>> history(TelemetryMode mode) async {
     final root = baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
-    final uri = Uri.parse('$root/api/v1/history').replace(
+    final uri = Uri.parse('$root/gradio_api/api/v1/history').replace(
       queryParameters: {'mode': mode.queryValue, 'limit': '120'},
     );
     final response = await http.get(uri).timeout(const Duration(seconds: 8));
@@ -330,7 +331,7 @@ class _TelemetryHomePageState extends State<TelemetryHomePage> {
             SizedBox(width: 10),
             Text('TELEMETRY', style: TextStyle(letterSpacing: 2)),
             SizedBox(width: 8),
-            Text('2.0', style: TextStyle(color: Color(0xFF12C8C0))),
+            Text('3.0', style: TextStyle(color: Color(0xFF12C8C0))),
           ],
         ),
         actions: [
