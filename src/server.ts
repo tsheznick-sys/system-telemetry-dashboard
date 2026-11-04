@@ -1,12 +1,14 @@
 import 'dotenv/config';
 import express from 'express';
-import path from 'path';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { faker } from '@faker-js/faker';
 
 const app = express();
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 app.use(express.json());
-app.use(express.static(path.join(process.cwd(), 'public')));
+app.use(express.static(path.join(projectRoot, 'public')));
 
 app.get('/api/telemetry', (_req, res) => {
   const telemetryData = {
@@ -29,7 +31,7 @@ app.get('/api/telemetry', (_req, res) => {
   res.json(telemetryData);
 });
 
-if (require.main === module) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT ?? 3000);
   app.listen(port, () => {
     console.log(`Cloud Telemetry Engine running on port ${port}`);
