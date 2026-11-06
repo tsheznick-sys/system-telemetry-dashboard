@@ -38,6 +38,9 @@ The telemetry API's OpenAPI schema is available at
 | Method and path | Description |
 | --- | --- |
 | `GET /gradio_api/api/v1/health` | Service version and health. |
+| `GET /gradio_api/calculator` | Open the calculator UI. |
+| `POST /gradio_api/api/v1/calculate` | Evaluate a safe arithmetic expression. |
+| `POST /api/v1/research` (`/gradio_api/api/v1/research`) | Fetch and rank 1–5 public HTTPS pages for a research query. |
 | `GET /gradio_api/api/v1/metrics?mode=live` | Collect and return a current host sample. |
 | `GET /gradio_api/api/v1/metrics?mode=simulated` | Generate a demo sample. |
 | `GET /gradio_api/api/v1/history?mode=live&limit=120` | Return recent persisted samples for one mode. `limit` is 1–600. |
@@ -60,6 +63,37 @@ Incident profiles, adjust its sample window and refresh interval, display
 interactive Plotly trends, and export the chart data. Operational profiles only
 affect simulated samples; they never create artificial load on the host.
 The dashboard uses the same durable history as the API and Flutter client.
+
+The dashboard also includes a **Public Web Research** panel, backed by
+`POST /api/v1/research` (also available at
+`/gradio_api/api/v1/research`). Submit a `query` and one to five `urls`:
+
+```json
+{
+  "query": "Python asyncio concurrency",
+  "urls": ["https://docs.python.org/3/library/asyncio.html"]
+}
+```
+
+The research module fetches public HTTPS pages only. It rejects non-public IP
+addresses, does not follow redirects, and limits each response to 1 MB and 12
+seconds. It extracts page text and ranks sources with deterministic hashed
+lexical similarity; it is not an LLM and does not create unsupported
+conclusions. Dossiers and CSV source records are written under
+`~/.local/share/ghost-telemetry/research` by default; set `RESEARCH_OUTPUT_DIR`
+to change that location. Because the API has no authentication, keep the service
+port private or behind an authenticated gateway.
+
+For a calculator-only service that is safe to expose separately from host
+telemetry, run:
+
+```sh
+python calculator_server.py
+```
+
+It listens on port `7862` and serves the calculator at `/` (or `/calculator`).
+This service exposes only the calculator and health routes; it does not mount
+the telemetry dashboard or telemetry APIs.
 
 Run the Python API and dashboard tests with:
 

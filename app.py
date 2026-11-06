@@ -19,11 +19,14 @@ from typing import AsyncIterator, Literal
 import gradio as gr
 import psutil
 import plotly.graph_objects as go
-from fastapi import Query
+from fastapi import HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from gradio.routes import App as GradioApp
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from calculator import calculate, format_result
+from research_agent_cluster import MAX_TARGETS, ResearchSynthesizerOrchestrator
 
 APP_VERSION = "4.0.0"
 HISTORY_CAPACITY = 600
@@ -64,6 +67,15 @@ class TelemetrySnapshot(BaseModel):
     error_rate_percent: float | None
     alerts: list[str]
     events: list[str]
+
+
+class CalculatorExpression(BaseModel):
+    expression: str = Field(min_length=1, max_length=256)
+
+
+class ResearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    urls: list[str] = Field(min_length=1, max_length=MAX_TARGETS)
 
 
 def _host_info() -> HostInfo:
@@ -346,8 +358,8 @@ cors_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_methods=["GET"],
-    allow_headers=["Accept"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Accept", "Content-Type"],
     max_age=600,
 )
 
@@ -355,6 +367,67 @@ app.add_middleware(
 @app.get("/api/v1/health", include_in_schema=False)
 def health() -> dict[str, str]:
     return {"status": "ok", "version": APP_VERSION}
+
+
+@app.get("/calculator", include_in_schema=False)
+def calculator_page() -> FileResponse:
+    return FileResponse(Path(__file__).with_name("calculator.html"))
+
+
+@app.post("/api/v1/calculate", include_in_schema=False)
+def calculate_expression(
+    request: CalculatorExpression,
+) -> dict[str, int | float | str]:
+    try:
+        value = calculate(request.expression)
+    except (
+        SyntaxError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        ZeroDivisionError,
+    ) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"value": value, "result": format_result(value)}
+
+
+async def execute_research(query: str, urls: list[str]) -> dict[str, object]:
+    output_dir = Path(
+        os.getenv(
+            "RESEARCH_OUTPUT_DIR",
+            str(Path.home() / ".local" / "share" / "ghost-telemetry" / "research"),
+        )
+    )
+    orchestrator = ResearchSynthesizerOrchestrator(output_dir=output_dir)
+    return await orchestrator.execute_research_pipeline(query, urls)
+
+
+@app.post("/api/v1/research")
+async def run_research(request: ResearchRequest) -> dict[str, object]:
+    try:
+        return await execute_research(request.query, request.urls)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+app.add_api_route(
+    "/gradio_api/calculator",
+    calculator_page,
+    methods=["GET"],
+    include_in_schema=False,
+)
+app.add_api_route(
+    "/gradio_api/api/v1/calculate",
+    calculate_expression,
+    methods=["POST"],
+    include_in_schema=False,
+)
+app.add_api_route(
+    "/gradio_api/api/v1/research",
+    run_research,
+    methods=["POST"],
+    include_in_schema=False,
+)
 
 
 @app.get(
@@ -616,6 +689,21 @@ async def get_telemetry(
     )
 
 
+async def run_research_from_dashboard(
+    query: str, urls_text: str
+) -> str:
+    urls = [line.strip() for line in urls_text.splitlines() if line.strip()]
+    if not query.strip():
+        raise gr.Error("Enter a research question.")
+    if not 1 <= len(urls) <= MAX_TARGETS:
+        raise gr.Error(f"Provide between 1 and {MAX_TARGETS} HTTPS URLs.")
+    try:
+        result = await execute_research(query, urls)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    return str(result["dossier"])
+
+
 def update_refresh_interval(seconds: int) -> float:
     return float(seconds)
 
@@ -625,6 +713,7 @@ with gr.Blocks(title="Ghost Telemetry Engine v4.0") as demo:
         """
         # ⚡ GHOST TELEMETRY ENGINE <span style="color:#22d3ee">/ 4.0</span>
         Live host diagnostics · Durable history · Operational simulation profiles
+        · [Calculator](/gradio_api/calculator)
         """
     )
     with gr.Row():
@@ -721,6 +810,29 @@ with gr.Blocks(title="Ghost Telemetry Engine v4.0") as demo:
         queue=False,
     )
     demo.load(get_telemetry, inputs=inputs, outputs=outputs)
+    with gr.Accordion("Public Web Research", open=False):
+        gr.Markdown(
+            "Fetch up to five public HTTPS pages. Requests are limited to public "
+            "IP addresses and 1 MB per page. Ranking uses lexical similarity; "
+            "no LLM is used."
+        )
+        research_query = gr.Textbox(
+            label="Research question",
+            placeholder="What are the main findings across these sources?",
+            max_lines=3,
+        )
+        research_urls = gr.Textbox(
+            label="Public HTTPS URLs (one per line)",
+            placeholder="https://example.org/research",
+            lines=4,
+        )
+        research_button = gr.Button("Research sources", variant="primary")
+        research_output = gr.Markdown()
+        research_button.click(
+            run_research_from_dashboard,
+            inputs=[research_query, research_urls],
+            outputs=research_output,
+        )
 
 
 custom_css = """

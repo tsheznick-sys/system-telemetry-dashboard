@@ -1,0 +1,474 @@
+import argparse
+import asyncio
+import csv
+import io
+import json
+import logging
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ENGINE_VERSION = "2.0"
+MAX_INPUT_BYTES = 5 * 1024 * 1024
+MAX_CONCURRENT_TASKS = 4
+SUPPORTED_TEXT_SUFFIXES = {".txt", ".md", ".rst", ".log"}
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [COWORK_ENGINE] %(message)s",
+)
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class SandboxedFileSystem:
+    """Restrict input reads and output writes to the configured workspace."""
+
+    def __init__(self, root_dir: str | Path = "./workspace_sandbox") -> None:
+        self.root_path = Path(root_dir).expanduser().resolve()
+        self.incoming_path = self.root_path / "incoming"
+        self.outputs_path = self.root_path / "outputs"
+        self.processed_path = self.root_path / "processed"
+        for directory in (
+            self.incoming_path,
+            self.outputs_path,
+            self.processed_path,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+
+    def scan_incoming_folder(self) -> list[Path]:
+        """Return regular, non-symlink files sorted by name."""
+        files = sorted(
+            (
+                path
+                for path in self.incoming_path.iterdir()
+                if path.is_file() and not path.is_symlink()
+            ),
+            key=lambda path: path.name.casefold(),
+        )
+        logging.info("Found %d incoming file(s).", len(files))
+        return files
+
+    def read_input(self, path: Path) -> bytes:
+        """Read a bounded file only if it resolves inside the incoming folder."""
+        if path.is_symlink():
+            raise ValueError(f"Symbolic links are not accepted as input: {path.name}")
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(self.incoming_path.resolve()):
+            raise ValueError(f"Input is outside the incoming folder: {path.name}")
+        if not resolved.is_file():
+            raise ValueError(f"Input is not a regular file: {path.name}")
+        size = resolved.stat().st_size
+        if size > MAX_INPUT_BYTES:
+            raise ValueError(
+                f"{path.name} exceeds the {MAX_INPUT_BYTES}-byte input limit."
+            )
+        return resolved.read_bytes()
+
+    def secure_write_output(self, filename: str, content: str) -> Path:
+        """Write a named report under outputs without accepting path traversal."""
+        if Path(filename).name != filename or filename in {"", ".", ".."}:
+            raise ValueError("Output filename must be a simple filename.")
+        output_path = self.outputs_path / filename
+        if output_path.is_symlink():
+            raise ValueError(f"Refusing to overwrite symbolic link: {filename}")
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.outputs_path,
+                prefix=f".{filename}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file:
+                temporary_file.write(content)
+                temporary_path = Path(temporary_file.name)
+            temporary_path.replace(output_path)
+        except OSError:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise
+        logging.info("Wrote deliverable: %s (%d bytes)", output_path, output_path.stat().st_size)
+        return output_path
+
+
+class SubAgentWorker:
+    """Deterministic local analyzer; does not execute files or call an LLM."""
+
+    def __init__(self, worker_id: str, file_system: SandboxedFileSystem) -> None:
+        self.worker_id = worker_id
+        self.file_system = file_system
+
+    async def execute_subtask(self, task: dict[str, Any]) -> dict[str, Any]:
+        started = time.perf_counter()
+        try:
+            result = await asyncio.to_thread(self._analyze_file, task)
+        except (
+            OSError,
+            RuntimeError,
+            UnicodeError,
+            csv.Error,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
+            logging.error(
+                "Task %s failed while processing %s: %s",
+                task["task_id"],
+                task["filename"],
+                exc,
+            )
+            result = {
+                **task,
+                "file_type": task["path"].suffix.lower() or "no extension",
+                "status": "FAILED",
+                "description": "Input could not be analyzed.",
+                "notes": str(exc),
+                "findings": [],
+                "processed_at": utc_timestamp(),
+            }
+        result["worker_id"] = self.worker_id
+        result["duration_seconds"] = round(time.perf_counter() - started, 4)
+        return result
+
+    def _analyze_file(self, task: dict[str, Any]) -> dict[str, Any]:
+        path: Path = task["path"]
+        common = {
+            "task_id": task["task_id"],
+            "filename": path.name,
+            "file_type": path.suffix.lower() or "no extension",
+            "processed_at": utc_timestamp(),
+        }
+        content = self.file_system.read_input(path)
+        suffix = path.suffix.lower()
+
+        if suffix in SUPPORTED_TEXT_SUFFIXES:
+            text = content.decode("utf-8")
+            lines = text.splitlines()
+            findings = [
+                f"UTF-8 text file contains {len(lines)} line(s).",
+                f"Text contains {len(text.split())} word(s) and {len(content)} byte(s).",
+            ]
+            return {
+                **common,
+                "status": "COMPLETED",
+                "description": "Text file statistics.",
+                "notes": "Content was measured but not executed or sent to an external service.",
+                "findings": findings,
+            }
+
+        if suffix == ".csv":
+            text = content.decode("utf-8-sig")
+            reader = csv.DictReader(text.splitlines())
+            if reader.fieldnames is None:
+                raise ValueError("CSV file has no header row.")
+            row_count = 0
+            blank_cells = 0
+            for row in reader:
+                row_count += 1
+                blank_cells += sum(value is None or value.strip() == "" for value in row.values())
+            return {
+                **common,
+                "status": "COMPLETED",
+                "description": "CSV structure and completeness statistics.",
+                "notes": f"Columns: {', '.join(reader.fieldnames)}",
+                "findings": [
+                    f"CSV contains {row_count} data row(s) and {len(reader.fieldnames)} column(s).",
+                    f"Found {blank_cells} blank or missing cell(s).",
+                ],
+            }
+
+        if suffix == ".json":
+            value = json.loads(content)
+            if isinstance(value, dict):
+                shape = f"object with {len(value)} top-level key(s)"
+                keys = list(value)[:20]
+                findings = [f"Top-level keys: {', '.join(map(str, keys)) or '(none)' }."]
+            elif isinstance(value, list):
+                shape = f"array with {len(value)} item(s)"
+                findings = [f"Top-level array contains {len(value)} item(s)."]
+            else:
+                shape = type(value).__name__
+                findings = [f"Top-level JSON value is {shape}."]
+            return {
+                **common,
+                "status": "COMPLETED",
+                "description": "JSON structure summary.",
+                "notes": f"Valid JSON: {shape}.",
+                "findings": findings,
+            }
+
+        return {
+            **common,
+            "status": "UNSUPPORTED",
+            "description": "File type is not supported by the local analyzer.",
+            "notes": (
+                "Supported formats are UTF-8 TXT, MD, RST, LOG, CSV, and JSON. "
+                "Files are never executed."
+            ),
+            "findings": [],
+        }
+
+
+class AutonomousCoworkOrchestrator:
+    """Local, evidence-based workflow engine, version 2.0."""
+
+    def __init__(
+        self,
+        sandbox_path: str | Path = "./workspace_sandbox",
+        max_concurrency: int = MAX_CONCURRENT_TASKS,
+    ) -> None:
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be at least 1.")
+        self.fs = SandboxedFileSystem(sandbox_path)
+        self.max_concurrency = max_concurrency
+        self.active_sub_agents = [
+            SubAgentWorker(f"LOCAL_WORKER_{index:02d}", self.fs)
+            for index in range(1, max_concurrency + 1)
+        ]
+        self.results_store: list[dict[str, Any]] = []
+        self.execution_start_time: float | None = None
+        self.execution_end_time: float | None = None
+        self.execution_duration = 0.0
+        self.execution_status = "PENDING"
+        self.execution_errors: list[str] = []
+        self.execution_history: list[dict[str, Any]] = []
+
+    async def decompose_goal(self, project_goal: str) -> list[dict[str, Any]]:
+        """Create one local analysis task for each actual incoming file."""
+        if not project_goal.strip():
+            raise ValueError("The workflow goal cannot be empty.")
+        return [
+            {
+                "task_id": f"FILE_{index:04d}",
+                "filename": path.name,
+                "path": path,
+            }
+            for index, path in enumerate(self.fs.scan_incoming_folder(), start=1)
+        ]
+
+    async def coordinate_parallel_execution(
+        self, subtasks: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Analyze files concurrently with a configurable upper bound."""
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+
+        async def run_task(index: int, task: dict[str, Any]) -> dict[str, Any]:
+            async with semaphore:
+                worker = self.active_sub_agents[index % len(self.active_sub_agents)]
+                return await worker.execute_subtask(task)
+
+        return list(
+            await asyncio.gather(
+                *(run_task(index, task) for index, task in enumerate(subtasks))
+            )
+        )
+
+    async def compile_enterprise_deliverable(
+        self, goal: str, results: list[dict[str, Any]]
+    ) -> str:
+        """Compile a report and CSV using only recorded analysis results."""
+        completed = sum(result["status"] == "COMPLETED" for result in results)
+        unsupported = sum(result["status"] == "UNSUPPORTED" for result in results)
+        failed = sum(result["status"] == "FAILED" for result in results)
+        timestamp = utc_timestamp()
+        report_lines = [
+            f"# Local Cowork Orchestrator v{ENGINE_VERSION} Report",
+            "",
+            f"- Goal: {self._one_line(goal)}",
+            f"- Generated (UTC): {timestamp}",
+            f"- Status: {self.execution_status}",
+            f"- Duration: {self.execution_duration:.3f} seconds",
+            f"- Files analyzed: {completed}",
+            f"- Unsupported files: {unsupported}",
+            f"- Failed files: {failed}",
+            "",
+            "This local deterministic report contains observed file statistics only. "
+            "No LLM, external service, or executable file processing is used.",
+            "",
+            "## File results",
+        ]
+        if not results:
+            report_lines.append("No files were found in the incoming folder.")
+
+        for result in results:
+            report_lines.extend(
+                [
+                    "",
+                    f"### {self._one_line(result['filename'])}",
+                    f"- Status: {result['status']}",
+                    f"- Type: {result['file_type']}",
+                    f"- Description: {self._one_line(result['description'])}",
+                    f"- Notes: {self._one_line(result['notes'])}",
+                ]
+            )
+            report_lines.extend(
+                f"- Finding: {self._one_line(finding)}"
+                for finding in result["findings"]
+            )
+
+        report = "\n".join(report_lines) + "\n"
+        self.fs.secure_write_output("executive_synthesis_report.md", report)
+
+        csv_fields = [
+            "task_id",
+            "filename",
+            "file_type",
+            "status",
+            "description",
+            "notes",
+            "findings",
+            "worker_id",
+            "duration_seconds",
+            "processed_at",
+        ]
+        csv_buffer = io.StringIO(newline="")
+        writer = csv.writer(csv_buffer)
+        writer.writerow(csv_fields)
+        for result in results:
+            values = {
+                **result,
+                "findings": " | ".join(result["findings"]),
+            }
+            writer.writerow(
+                [
+                    self._csv_safe(values.get(field, ""))
+                    for field in csv_fields
+                ]
+            )
+        self.fs.secure_write_output(
+            "structured_metrics_export.csv", csv_buffer.getvalue()
+        )
+        return report
+
+    @staticmethod
+    def _one_line(value: Any) -> str:
+        return str(value).replace("\r", " ").replace("\n", " ").strip()
+
+    @classmethod
+    def _csv_safe(cls, value: Any) -> str:
+        text = cls._one_line(value)
+        first_visible = text.lstrip()[:1]
+        if first_visible in {"=", "+", "-", "@"}:
+            return "'" + text
+        return text
+
+    async def run_autonomous_workflow(self, master_goal: str) -> str:
+        """Run file analysis, record status, and write deliverables."""
+        if not master_goal.strip():
+            raise ValueError("The workflow goal cannot be empty.")
+
+        self.execution_start_time = time.perf_counter()
+        self.execution_end_time = None
+        self.execution_duration = 0.0
+        self.execution_errors.clear()
+        self.results_store.clear()
+        self.execution_status = "RUNNING"
+        started_at = utc_timestamp()
+        self.execution_history.append(
+            {"goal": master_goal.strip(), "started_at": started_at}
+        )
+        logging.info("Starting local Cowork v%s workflow.", ENGINE_VERSION)
+
+        try:
+            tasks = await self.decompose_goal(master_goal)
+            self.results_store = await self.coordinate_parallel_execution(tasks)
+            self.execution_errors = [
+                f"{result['filename']}: {result['notes']}"
+                for result in self.results_store
+                if result["status"] == "FAILED"
+            ]
+            self.execution_status = (
+                "COMPLETED_WITH_ERRORS" if self.execution_errors else "COMPLETED"
+            )
+            self.execution_end_time = time.perf_counter()
+            self.execution_duration = self.execution_end_time - self.execution_start_time
+            report = await self.compile_enterprise_deliverable(
+                master_goal, self.results_store
+            )
+            self.execution_history[-1].update(
+                {
+                    "finished_at": utc_timestamp(),
+                    "status": self.execution_status,
+                    "duration_seconds": round(self.execution_duration, 4),
+                    "file_count": len(self.results_store),
+                }
+            )
+            logging.info(
+                "Workflow %s in %.3f seconds; analyzed %d file(s).",
+                self.execution_status,
+                self.execution_duration,
+                len(self.results_store),
+            )
+            return report
+        except asyncio.CancelledError:
+            self.execution_status = "CANCELLED"
+            self.execution_errors.append("Workflow was cancelled.")
+            raise
+        except Exception as exc:
+            self.execution_status = "FAILED"
+            self.execution_errors.append(str(exc))
+            logging.exception("Local Cowork workflow failed.")
+            raise
+        finally:
+            if self.execution_end_time is None or self.execution_status in {
+                "FAILED",
+                "CANCELLED",
+            }:
+                self.execution_end_time = time.perf_counter()
+                self.execution_duration = (
+                    self.execution_end_time - self.execution_start_time
+                )
+            if self.execution_history and "finished_at" not in self.execution_history[-1]:
+                self.execution_history[-1].update(
+                    {
+                        "finished_at": utc_timestamp(),
+                        "status": self.execution_status,
+                        "duration_seconds": round(self.execution_duration, 4),
+                        "file_count": len(self.results_store),
+                        "errors": list(self.execution_errors),
+                    }
+                )
+
+
+async def _run_cli(goal: str, sandbox_path: str) -> None:
+    orchestrator = AutonomousCoworkOrchestrator(sandbox_path)
+    print(f"Starting Local Cowork Orchestrator v{ENGINE_VERSION}")
+    print(f"Incoming files: {orchestrator.fs.incoming_path}")
+    report = await orchestrator.run_autonomous_workflow(goal)
+    print(report)
+    print(f"Deliverables: {orchestrator.fs.outputs_path}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Analyze files locally and generate an evidence-based report."
+    )
+    parser.add_argument(
+        "goal",
+        nargs="?",
+        default="Analyze the files in the incoming folder.",
+        help="Goal to include in the workflow report.",
+    )
+    parser.add_argument(
+        "--sandbox",
+        default="./workspace_sandbox",
+        help="Sandbox directory containing incoming/ and outputs/.",
+    )
+    args = parser.parse_args()
+    try:
+        asyncio.run(_run_cli(args.goal, args.sandbox))
+    except KeyboardInterrupt:
+        print("\nWorkflow interrupted.")
+    except Exception as exc:
+        logging.error("Workflow failed: %s", exc)
+        raise SystemExit(1) from exc
+
+
+if __name__ == "__main__":
+    main()
