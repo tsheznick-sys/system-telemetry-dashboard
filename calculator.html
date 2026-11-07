@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#090d14">
+    <meta
+      name="description"
+      content="A clean, keyboard-friendly scientific calculator."
+    >
+    <title>Calculator · Ghost Telemetry</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #090d14;
+        color: #eef4fa;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+        --panel: rgba(17, 25, 36, 0.88);
+        --panel-border: rgba(159, 181, 207, 0.12);
+        --muted: #8290a2;
+        --accent: #63e0d0;
+        --accent-strong: #20bcae;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        background:
+          radial-gradient(ellipse at 18% 0%, rgba(32, 188, 174, 0.11), transparent 38rem),
+          radial-gradient(ellipse at 100% 100%, rgba(60, 109, 182, 0.12), transparent 34rem),
+          #090d14;
+      }
+
+      button, input { font: inherit; }
+      button { color: inherit; }
+
+      .shell {
+        width: min(1120px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 38px 0 56px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 48px;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        color: #f5f8fc;
+        font-size: 13px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-decoration: none;
+        text-transform: uppercase;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border: 1px solid rgba(99, 224, 208, 0.32);
+        border-radius: 11px;
+        background: rgba(99, 224, 208, 0.1);
+        color: var(--accent);
+        font-size: 17px;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: #a7b3c1;
+        font-size: 12px;
+      }
+
+      .status::before {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 12px rgba(99, 224, 208, 0.75);
+        content: "";
+      }
+
+      .intro { margin-bottom: 27px; }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.17em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(32px, 5vw, 48px);
+        font-weight: 650;
+        letter-spacing: -0.045em;
+      }
+
+      .subtitle {
+        max-width: 560px;
+        margin: 12px 0 0;
+        color: #9aa8b8;
+        font-size: 15px;
+        line-height: 1.65;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        align-items: start;
+        gap: 18px;
+      }
+
+      .card {
+        border: 1px solid var(--panel-border);
+        border-radius: 20px;
+        background: var(--panel);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.25);
+        backdrop-filter: blur(18px);
+      }
+
+      .calculator { padding: clamp(18px, 3vw, 28px); }
+
+      .display {
+        min-height: 154px;
+        margin-bottom: 18px;
+        padding: 20px;
+        border: 1px solid rgba(159, 181, 207, 0.1);
+        border-radius: 15px;
+        background: rgba(5, 9, 14, 0.72);
+      }
+
+      .display-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      .expression {
+        width: 100%;
+        padding: 0;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: #f5f8fc;
+        font-size: clamp(23px, 4vw, 34px);
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.03em;
+        text-align: right;
+      }
+
+      .expression::placeholder { color: #495565; }
+      .expression:focus-visible { text-decoration: underline; text-decoration-color: rgba(99, 224, 208, 0.35); text-underline-offset: 7px; }
+
+      .result-row {
+        display: flex;
+        min-height: 34px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .result {
+        overflow: hidden;
+        color: var(--accent);
+        font-size: clamp(20px, 3vw, 27px);
+        font-variant-numeric: tabular-nums;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .result.error { color: #ff9a9a; font-size: 14px; font-weight: 500; }
+
+      .copy-button {
+        flex: 0 0 auto;
+        border: 0;
+        background: none;
+        color: #9aa8b8;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .copy-button:hover, .copy-button:focus-visible { color: var(--accent); }
+
+      .keypad {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 9px;
+      }
+
+      .key {
+        min-height: 54px;
+        border: 1px solid rgba(159, 181, 207, 0.1);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.045);
+        color: #dce5ef;
+        cursor: pointer;
+        font-size: 16px;
+        font-weight: 550;
+        transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+      }
+
+      .key:hover {
+        transform: translateY(-1px);
+        border-color: rgba(99, 224, 208, 0.38);
+        background: rgba(99, 224, 208, 0.09);
+      }
+
+      .key:active { transform: translateY(0); }
+      .key:focus-visible, .copy-button:focus-visible, .history-clear:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .key.utility { color: #a6b3c1; font-size: 13px; }
+      .key.operator { background: rgba(99, 224, 208, 0.08); color: var(--accent); }
+      .key.equals {
+        border-color: transparent;
+        background: linear-gradient(135deg, #39d6c3, #1baea4);
+        color: #06120f;
+        font-size: 20px;
+        font-weight: 750;
+      }
+      .key.equals:hover { background: linear-gradient(135deg, #69eadb, #30c6b8); }
+
+      .side-column { display: grid; gap: 18px; }
+      .side-card { padding: 21px; }
+
+      .side-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 0 0 16px;
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .history-clear {
+        padding: 4px 0 4px 8px;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .history-clear:hover { color: #ff9a9a; }
+
+      .history-list {
+        display: grid;
+        max-height: 310px;
+        gap: 8px;
+        overflow: auto;
+      }
+
+      .history-item {
+        display: grid;
+        width: 100%;
+        gap: 4px;
+        padding: 11px 12px;
+        border: 1px solid rgba(159, 181, 207, 0.08);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.025);
+        cursor: pointer;
+        text-align: left;
+      }
+      .history-item:hover { border-color: rgba(99, 224, 208, 0.26); }
+      .history-expression {
+        overflow: hidden;
+        color: #aab6c4;
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .history-result { color: var(--accent); font-size: 14px; font-weight: 600; }
+      .empty-history { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+      .help-card p {
+        margin: 0;
+        color: #a0adbc;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .help-card code {
+        padding: 2px 5px;
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.06);
+        color: #c9d4df;
+        font-size: 11px;
+      }
+
+      .footer {
+        margin-top: 21px;
+        color: #647284;
+        font-size: 11px;
+        text-align: center;
+      }
+
+      @media (max-width: 800px) {
+        .layout { grid-template-columns: minmax(0, 1fr); }
+        .side-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .topbar { margin-bottom: 38px; }
+      }
+
+      @media (max-width: 520px) {
+        .shell { width: min(100% - 24px, 430px); padding-top: 22px; }
+        .topbar { margin-bottom: 32px; }
+        .brand { font-size: 11px; }
+        .status { font-size: 10px; }
+        .side-column { grid-template-columns: minmax(0, 1fr); }
+        .keypad { gap: 7px; }
+        .key { min-height: 48px; border-radius: 10px; }
+        .display { min-height: 142px; padding: 16px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Ghost Telemetry home">
+          <span class="brand-mark" aria-hidden="true">⌁</span>
+          <span>Ghost Telemetry</span>
+        </a>
+        <span class="status">Ready to calculate</span>
+      </header>
+
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">Precision, without the clutter</p>
+        <h1 id="page-title">Calculator</h1>
+        <p class="subtitle">A focused scientific calculator for quick arithmetic and everyday math. Type an expression, use the keypad, or combine both.</p>
+      </section>
+
+      <div class="layout">
+        <section class="card calculator" aria-label="Calculator">
+          <form id="calculator-form" novalidate>
+            <div class="display">
+              <label class="display-label" for="expression">
+                <span>Expression</span>
+                <span>Enter ↵</span>
+              </label>
+              <input
+                id="expression"
+                class="expression"
+                name="expression"
+                type="text"
+                inputmode="text"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                maxlength="256"
+                placeholder="Try 12 × (3 + 4)"
+                aria-describedby="result"
+                autofocus
+              >
+              <div class="result-row">
+                <output id="result" class="result" aria-live="polite">—</output>
+                <button id="copy-result" class="copy-button" type="button" hidden>Copy</button>
+              </div>
+            </div>
+
+            <div class="keypad" aria-label="Calculator keypad">
+              <button class="key utility" type="button" data-action="clear" aria-label="Clear">AC</button>
+              <button class="key utility" type="button" data-insert="(">(</button>
+              <button class="key utility" type="button" data-insert=")">)</button>
+              <button class="key utility" type="button" data-action="backspace" aria-label="Backspace">⌫</button>
+              <button class="key operator" type="button" data-insert="/">÷</button>
+
+              <button class="key utility" type="button" data-insert="sqrt(">√</button>
+              <button class="key utility" type="button" data-insert="sin(">sin</button>
+              <button class="key utility" type="button" data-insert="cos(">cos</button>
+              <button class="key utility" type="button" data-insert="tan(">tan</button>
+              <button class="key operator" type="button" data-insert="**">xʸ</button>
+
+              <button class="key" type="button" data-insert="7">7</button>
+              <button class="key" type="button" data-insert="8">8</button>
+              <button class="key" type="button" data-insert="9">9</button>
+              <button class="key utility" type="button" data-insert="pi">π</button>
+              <button class="key operator" type="button" data-insert="*">×</button>
+
+              <button class="key" type="button" data-insert="4">4</button>
+              <button class="key" type="button" data-insert="5">5</button>
+              <button class="key" type="button" data-insert="6">6</button>
+              <button class="key utility" type="button" data-insert="log(">log</button>
+              <button class="key operator" type="button" data-insert="-">−</button>
+
+              <button class="key" type="button" data-insert="1">1</button>
+              <button class="key" type="button" data-insert="2">2</button>
+              <button class="key" type="button" data-insert="3">3</button>
+              <button class="key utility" type="button" data-insert="e">e</button>
+              <button class="key operator" type="button" data-insert="+">+</button>
+
+              <button class="key utility" type="button" data-insert="%">%</button>
+              <button class="key" type="button" data-insert="0">0</button>
+              <button class="key" type="button" data-insert=".">.</button>
+              <button class="key operator" type="button" data-insert="//">⌊÷⌋</button>
+              <button class="key equals" type="submit" aria-label="Calculate">=</button>
+            </div>
+          </form>
+          <p class="footer">Use your keyboard · Press Enter to calculate · Esc to clear</p>
+        </section>
+
+        <aside class="side-column" aria-label="Calculator tools">
+          <section class="card side-card">
+            <h2 class="side-heading">
+              <span>Recent calculations</span>
+              <button id="clear-history" class="history-clear" type="button">Clear</button>
+            </h2>
+            <div id="history-list" class="history-list" aria-live="polite"></div>
+          </section>
+          <section class="card side-card help-card">
+            <h2 class="side-heading">Quick guide</h2>
+            <p>Use <code>+ − × ÷</code>, parentheses, powers with <code>**</code>, and functions like <code>sqrt(25)</code> or <code>sin(pi / 2)</code>. Trigonometric functions use radians.</p>
+          </section>
+        </aside>
+      </div>
+    </main>
+
+    <script>
+      (() => {
+        const form = document.querySelector("#calculator-form");
+        const expressionInput = document.querySelector("#expression");
+        const resultOutput = document.querySelector("#result");
+        const copyButton = document.querySelector("#copy-result");
+        const historyList = document.querySelector("#history-list");
+        const historyKey = "ghost-calculator-history";
+        let lastResult = "";
+
+        function getHistory() {
+          try {
+            const history = JSON.parse(localStorage.getItem(historyKey) || "[]");
+            return Array.isArray(history) ? history.filter((item) =>
+              item && typeof item.expression === "string" && typeof item.result === "string"
+            ).slice(0, 8) : [];
+          } catch {
+            return [];
+          }
+        }
+
+        function renderHistory() {
+          const history = getHistory();
+          historyList.replaceChildren();
+          if (!history.length) {
+            const empty = document.createElement("p");
+            empty.className = "empty-history";
+            empty.textContent = "Your recent results will appear here.";
+            historyList.append(empty);
+            return;
+          }
+          history.forEach(({ expression, result }) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "history-item";
+            const expressionText = document.createElement("span");
+            expressionText.className = "history-expression";
+            expressionText.textContent = expression;
+            const resultText = document.createElement("span");
+            resultText.className = "history-result";
+            resultText.textContent = result;
+            button.append(expressionText, resultText);
+            button.addEventListener("click", () => {
+              expressionInput.value = expression;
+              expressionInput.focus();
+            });
+            historyList.append(button);
+          });
+        }
+
+        function showError(message) {
+          resultOutput.textContent = message;
+          resultOutput.classList.add("error");
+          resultOutput.title = message;
+          copyButton.hidden = true;
+          lastResult = "";
+        }
+
+        function showResult(value) {
+          lastResult = value;
+          resultOutput.textContent = value;
+          resultOutput.title = value;
+          resultOutput.classList.remove("error");
+          copyButton.hidden = false;
+        }
+
+        function insertAtCursor(text) {
+          const start = expressionInput.selectionStart ?? expressionInput.value.length;
+          const end = expressionInput.selectionEnd ?? start;
+          const next = expressionInput.value.slice(0, start) + text + expressionInput.value.slice(end);
+          if (next.length > 256) return;
+          expressionInput.value = next;
+          const cursor = start + text.length;
+          expressionInput.setSelectionRange(cursor, cursor);
+          expressionInput.focus();
+        }
+
+        document.querySelectorAll("[data-insert]").forEach((button) => {
+          button.addEventListener("click", () => insertAtCursor(button.dataset.insert));
+        });
+
+        document.querySelector('[data-action="clear"]').addEventListener("click", () => {
+          expressionInput.value = "";
+          showResult("—");
+          expressionInput.focus();
+        });
+
+        document.querySelector('[data-action="backspace"]').addEventListener("click", () => {
+          const start = expressionInput.selectionStart ?? expressionInput.value.length;
+          const end = expressionInput.selectionEnd ?? start;
+          const from = start === end ? Math.max(0, start - 1) : start;
+          expressionInput.setRangeText("", from, end, "end");
+          expressionInput.focus();
+        });
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const expression = expressionInput.value.trim();
+          if (!expression) {
+            showError("Enter an expression to calculate.");
+            expressionInput.focus();
+            return;
+          }
+
+          resultOutput.textContent = "Calculating…";
+          resultOutput.classList.remove("error");
+          copyButton.hidden = true;
+          try {
+            const apiPrefix = window.location.pathname.startsWith("/gradio_api/")
+              ? "/gradio_api"
+              : "";
+            const response = await fetch(`${apiPrefix}/api/v1/calculate`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Accept": "application/json" },
+              body: JSON.stringify({ expression }),
+            });
+            const payload = await response.json();
+            if (!response.ok) {
+              const detail = typeof payload.detail === "string" ? payload.detail : "Check the expression and try again.";
+              throw new Error(detail);
+            }
+            showResult(payload.result);
+            const history = getHistory();
+            localStorage.setItem(historyKey, JSON.stringify([
+              { expression, result: payload.result },
+              ...history.filter((item) => item.expression !== expression),
+            ].slice(0, 8)));
+            renderHistory();
+          } catch (error) {
+            showError(error instanceof Error ? error.message : "The calculation failed.");
+          }
+        });
+
+        copyButton.addEventListener("click", async () => {
+          if (!lastResult) return;
+          try {
+            await navigator.clipboard.writeText(lastResult);
+            copyButton.textContent = "Copied";
+            window.setTimeout(() => { copyButton.textContent = "Copy"; }, 1200);
+          } catch {
+            showError("Clipboard access is unavailable in this browser.");
+          }
+        });
+
+        document.querySelector("#clear-history").addEventListener("click", () => {
+          localStorage.removeItem(historyKey);
+          renderHistory();
+        });
+
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            expressionInput.value = "";
+            showResult("—");
+          }
+        });
+
+        renderHistory();
+        expressionInput.focus();
+      })();
+    </script>
+  </body>
+</html>

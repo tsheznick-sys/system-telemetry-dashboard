@@ -1,0 +1,463 @@
+import argparse
+import asyncio
+import json
+import logging
+import random
+import shlex
+import time
+from pathlib import Path
+from typing import Any, Dict
+
+import aiohttp
+import numpy as np
+import pandas as pd
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler("apex_trading.log"), logging.StreamHandler()],
+)
+
+
+class ApexAITrader:
+    """Terminal paper trader using public Kraken quotes or simulated prices."""
+
+    def __init__(self, symbol: str = "BTC/USD", capital: float = 10_000.0):
+        if capital <= 0:
+            raise ValueError("Starting capital must be greater than zero.")
+
+        self.symbol = symbol.upper()
+        self.capital = capital
+        self.position = 0.0
+        self.entry_price = 0.0
+        self.pnl = 0.0
+        self.trade_history: list[Dict[str, Any]] = []
+        self.price_history: list[float] = []
+        self.trade_count = 0
+        self.max_drawdown = 0.0
+        self.portfolio_peak = capital
+        self.last_trade_time = 0.0
+        self.trade_frequency_limit = 60
+        file_symbol = self.symbol.replace("/", "")
+        self.trade_log_file = Path(f"trade_log_{file_symbol}.json")
+        self.price_log_file = Path(f"price_log_{file_symbol}.json")
+        self.market_source = "Kraken"
+        self.load_trade_history()
+        self.load_price_history()
+
+    async def fetch_market_data(self) -> float:
+        """Fetch one simulated price or a public Kraken ticker quote."""
+        if self.market_source == "Simulated":
+            base_price = 65_000.0 if not self.price_history else self.price_history[-1]
+            current_price = round(base_price + random.uniform(-150.0, 150.0), 2)
+        elif self.market_source == "Kraken":
+            base, quote = self.symbol.split("/", maxsplit=1)
+            kraken_base = "XBT" if base == "BTC" else base
+            pair = f"{kraken_base}{quote}"
+            url = "https://api.kraken.com/0/public/Ticker"
+            timeout = aiohttp.ClientTimeout(total=10)
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(
+                        url,
+                        params={"pair": pair},
+                    ) as response:
+                        response.raise_for_status()
+                        payload = await response.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Kraken returned an invalid response.")
+                errors = payload.get("error", [])
+                if errors:
+                    raise ValueError(", ".join(errors))
+                tickers = payload.get("result")
+                if not isinstance(tickers, dict) or not tickers:
+                    raise ValueError("Kraken returned no ticker data for this market.")
+                ticker = next(iter(tickers.values()))
+                current_price = float(ticker["c"][0])
+            except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"Could not fetch a valid Kraken ticker for {self.symbol}: {exc}"
+                ) from exc
+        else:
+            raise ValueError(f"Unknown market source: {self.market_source}")
+
+        if not np.isfinite(current_price) or current_price <= 0:
+            raise ValueError(f"Market data returned an invalid price: {current_price}")
+
+        self.price_history.append(current_price)
+        self.price_history = self.price_history[-500:]
+        return current_price
+
+    def calculate_technical_indicators(self) -> Dict[str, float]:
+        """Calculate moving averages, RSI, and return volatility."""
+        if len(self.price_history) < 15:
+            return {"rsi": 50.0, "sma_short": 0.0, "sma_long": 0.0, "volatility": 0.0}
+
+        prices = np.asarray(self.price_history, dtype=float)
+        if not np.isfinite(prices).all():
+            raise ValueError("Price history contains a non-finite value.")
+
+        series = pd.Series(prices)
+        sma_short = series.rolling(window=5).mean().iloc[-1]
+        sma_long = series.rolling(window=15).mean().iloc[-1]
+        delta = series.diff()
+        average_gain = delta.clip(lower=0).rolling(window=14).mean().iloc[-1]
+        average_loss = (-delta.clip(upper=0)).rolling(window=14).mean().iloc[-1]
+        if average_loss == 0:
+            rsi = 100.0 if average_gain > 0 else 50.0
+        else:
+            relative_strength = average_gain / average_loss
+            rsi = 100.0 - (100.0 / (1.0 + relative_strength))
+        volatility = series.pct_change().rolling(window=10).std().iloc[-1]
+
+        return {
+            "rsi": round(float(rsi), 2),
+            "sma_short": round(float(sma_short), 2),
+            "sma_long": round(float(sma_long), 2),
+            "volatility": round(float(volatility), 6),
+        }
+
+    async def ai_reasoning_core(
+        self, current_price: float, indicators: Dict[str, float]
+    ) -> Dict[str, Any]:
+        action = "HOLD"
+        confidence = 0.5
+        reasoning = "Waiting for a clearer technical signal."
+
+        if indicators["rsi"] < 30 and indicators["sma_short"] > indicators["sma_long"] and self.position == 0:
+            action = "BUY"
+            confidence = 0.85
+            reasoning = "RSI is oversold and the short moving average is above the long moving average."
+        elif self.position > 0 and (
+            indicators["rsi"] > 70 or current_price < self.entry_price * 0.98
+        ):
+            action = "SELL"
+            confidence = 0.9
+            reasoning = "RSI is overbought or the 2% stop-loss threshold was reached."
+
+        return {"action": action, "confidence": confidence, "reasoning": reasoning}
+
+    async def execute_trade(
+        self,
+        action: str,
+        price: float,
+        reasoning: str,
+        allocation_percent: float = 25.0,
+    ) -> None:
+        if action not in {"BUY", "SELL"}:
+            return
+        if not 0 < allocation_percent <= 100:
+            raise ValueError("Paper-buy allocation must be between 0 and 100 percent.")
+        if (
+            action == "BUY"
+            and time.time() - self.last_trade_time < self.trade_frequency_limit
+        ):
+            logging.info("Trade skipped: the trade-frequency limit has not elapsed.")
+            return
+
+        if action == "BUY" and self.capital > 0 and self.position == 0:
+            units = (self.capital * allocation_percent / 100) / price
+            self.capital -= units * price
+            self.position = units
+            self.entry_price = price
+        elif action == "SELL" and self.position > 0:
+            units = self.position
+            profit = units * (price - self.entry_price)
+            self.capital += units * price
+            self.pnl += profit
+            self.position = 0.0
+            self.entry_price = 0.0
+        else:
+            return
+
+        self.last_trade_time = time.time()
+        self.trade_count += 1
+        self.trade_history.append(
+            {
+                "timestamp": time.time(),
+                "action": action,
+                "price": price,
+                "units": units,
+                "reason": reasoning,
+            }
+        )
+        logging.info(
+            "[PAPER TRADE] %s %s at %.2f (%.6f units): %s",
+            action,
+            self.symbol,
+            price,
+            units,
+            reasoning,
+        )
+
+    async def run_once(self) -> str:
+        current_price = await self.fetch_market_data()
+        indicators = self.calculate_technical_indicators()
+        decision = await self.ai_reasoning_core(current_price, indicators)
+        if decision["confidence"] >= 0.75:
+            await self.execute_trade(
+                decision["action"], current_price, decision["reasoning"]
+            )
+
+        portfolio_value = self.capital + self.position * current_price
+        self.portfolio_peak = max(self.portfolio_peak, portfolio_value)
+        if self.portfolio_peak:
+            drawdown = (self.portfolio_peak - portfolio_value) / self.portfolio_peak
+            self.max_drawdown = max(self.max_drawdown, drawdown)
+        self.save_history()
+
+        return (
+            f"{self.symbol} paper-trading update\n"
+            f"Source: {self.market_source}\n"
+            f"Price: ${current_price:,.2f}\n"
+            f"Decision: {decision['action']} "
+            f"({decision['confidence']:.0%} confidence)\n"
+            f"RSI: {indicators['rsi']} | SMA (5/15): "
+            f"{indicators['sma_short']:,.2f} / {indicators['sma_long']:,.2f}\n"
+            f"Cash: ${self.capital:,.2f} | Position: {self.position:.6f}\n"
+            f"Portfolio: ${portfolio_value:,.2f} | Realized P&L: ${self.pnl:,.2f}\n"
+            f"Trades: {self.trade_count} | Maximum drawdown: {self.max_drawdown:.2%}\n"
+            f"Reason: {decision['reasoning']}"
+        )
+
+    def load_trade_history(self) -> None:
+        if not self.trade_log_file.exists():
+            return
+        try:
+            data = json.loads(self.trade_log_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not isinstance(data.get("trades", []), list):
+                raise ValueError("Trade history must be a JSON object with a trades list.")
+            capital = float(data["capital"])
+            position = float(data["position"])
+            entry_price = float(data["entry_price"])
+            pnl = float(data["pnl"])
+            trade_count = int(data["trade_count"])
+            portfolio_peak = float(data.get("portfolio_peak", capital))
+            max_drawdown = float(data.get("max_drawdown", 0.0))
+            trades = data.get("trades", [])
+            account_values = (capital, position, entry_price, pnl, portfolio_peak, max_drawdown)
+            if (
+                not all(np.isfinite(value) for value in account_values)
+                or capital < 0
+                or position < 0
+                or entry_price < 0
+                or portfolio_peak < 0
+                or not 0 <= max_drawdown <= 1
+                or trade_count < 0
+            ):
+                raise ValueError("Trade history contains invalid account values.")
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            logging.warning("Ignoring invalid trade history %s: %s", self.trade_log_file, exc)
+            return
+        self.capital = capital
+        self.position = position
+        self.entry_price = entry_price
+        self.pnl = pnl
+        self.trade_count = trade_count
+        self.portfolio_peak = portfolio_peak
+        self.max_drawdown = max_drawdown
+        self.trade_history = trades
+
+    def load_price_history(self) -> None:
+        if not self.price_log_file.exists():
+            return
+        try:
+            prices = json.loads(self.price_log_file.read_text(encoding="utf-8"))
+            if not isinstance(prices, list):
+                raise ValueError("Price history must be a JSON list.")
+            loaded_prices = [float(price) for price in prices]
+            if any(not np.isfinite(price) or price <= 0 for price in loaded_prices):
+                raise ValueError("Price history contains an invalid price.")
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            logging.warning("Ignoring invalid price history %s: %s", self.price_log_file, exc)
+            return
+        self.price_history = loaded_prices[-500:]
+
+    def save_history(self) -> None:
+        trade_data = {
+            "capital": self.capital,
+            "position": self.position,
+            "entry_price": self.entry_price,
+            "pnl": self.pnl,
+            "trade_count": self.trade_count,
+            "portfolio_peak": self.portfolio_peak,
+            "max_drawdown": self.max_drawdown,
+            "trades": self.trade_history,
+        }
+        self.trade_log_file.write_text(
+            json.dumps(trade_data, indent=2), encoding="utf-8"
+        )
+        self.price_log_file.write_text(
+            json.dumps(self.price_history), encoding="utf-8"
+        )
+
+
+HELP_TEXT = """Commands:
+  price                    Fetch the latest public quote
+  analyze                  Fetch a quote and show indicators/signal (no trade)
+  tick                     Fetch a quote and run one paper-trading strategy tick
+  run [count]              Run strategy ticks every 3 seconds; Ctrl+C to stop
+  buy [percent]            Paper-buy using 25% of cash by default (max 100%)
+  sell                     Paper-sell the open position
+  status                   Show cash, position, and portfolio value
+  history                  Show the latest paper trades
+  symbol BASE/QUOTE        Change market, e.g. symbol ETH/USD
+  source kraken|simulated  Select public Kraken quotes or simulated prices
+  help                     Show this help
+  quit                     Exit
+
+Live quotes use Kraken's public endpoint and need no API key. All trades are
+simulated locally; this tool never submits orders to an exchange.
+"""
+
+
+async def terminal_session(trader: ApexAITrader) -> None:
+    print("Apex Terminal Paper Trader")
+    print("Public Kraken market data | paper trades only | no exchange orders")
+    print("Type 'help' to see commands.")
+
+    while True:
+        try:
+            raw_command = input(f"apex[{trader.symbol}]> ").strip()
+        except EOFError:
+            print("\nExiting.")
+            return
+        if not raw_command:
+            continue
+
+        try:
+            parts = shlex.split(raw_command)
+            command = parts[0].lower()
+            args = parts[1:]
+
+            if command in {"quit", "exit"}:
+                print("Exiting.")
+                return
+            if command == "help":
+                print(HELP_TEXT)
+            elif command == "source":
+                if len(args) != 1 or args[0].lower() not in {"kraken", "simulated"}:
+                    print("Usage: source kraken|simulated")
+                    continue
+                trader.market_source = args[0].capitalize()
+                print(f"Price source set to {trader.market_source}.")
+            elif command == "symbol":
+                if len(args) != 1 or args[0].count("/") != 1:
+                    print("Usage: symbol BASE/QUOTE (for example BTC/USD)")
+                    continue
+                base, quote = args[0].upper().split("/")
+                if not base.isalnum() or not quote.isalnum():
+                    print("Symbol parts must contain only letters or digits.")
+                    continue
+                trader = ApexAITrader(
+                    symbol=f"{base}/{quote}", capital=trader.capital
+                )
+                print(f"Market set to {trader.symbol}.")
+            elif command == "price":
+                price = await trader.fetch_market_data()
+                trader.save_history()
+                print(f"{trader.symbol}: ${price:,.2f} ({trader.market_source})")
+            elif command == "analyze":
+                price = await trader.fetch_market_data()
+                indicators = trader.calculate_technical_indicators()
+                decision = await trader.ai_reasoning_core(price, indicators)
+                trader.save_history()
+                print(
+                    f"{trader.symbol} ${price:,.2f} | RSI {indicators['rsi']} | "
+                    f"SMA5 {indicators['sma_short']:,.2f} | "
+                    f"SMA15 {indicators['sma_long']:,.2f}\n"
+                    f"Signal: {decision['action']} "
+                    f"({decision['confidence']:.0%}) — {decision['reasoning']}"
+                )
+            elif command == "tick":
+                print(await trader.run_once())
+            elif command == "run":
+                if len(args) > 1:
+                    print("Usage: run [count]")
+                    continue
+                count = int(args[0]) if args else None
+                if count is not None and count < 1:
+                    print("Count must be at least 1.")
+                    continue
+                completed = 0
+                try:
+                    while count is None or completed < count:
+                        print(await trader.run_once())
+                        completed += 1
+                        if count is None or completed < count:
+                            await asyncio.sleep(3)
+                except KeyboardInterrupt:
+                    print("\nStopped the run loop.")
+            elif command in {"buy", "sell"}:
+                if (command == "sell" and args) or len(args) > 1:
+                    print(f"Usage: {command}" + (" [percent]" if command == "buy" else ""))
+                    continue
+                allocation = float(args[0]) if args else 25.0
+                if command == "buy" and not 0 < allocation <= 100:
+                    print("Buy percentage must be greater than 0 and at most 100.")
+                    continue
+                price = await trader.fetch_market_data()
+                await trader.execute_trade(
+                    "BUY" if command == "buy" else "SELL",
+                    price,
+                    "Manual terminal paper trade.",
+                    allocation_percent=allocation,
+                )
+                trader.save_history()
+                print(
+                    f"Paper {command} checked at ${price:,.2f}. "
+                    f"Cash: ${trader.capital:,.2f}; position: {trader.position:.8f}."
+                )
+            elif command == "status":
+                price = await trader.fetch_market_data()
+                value = trader.capital + trader.position * price
+                trader.save_history()
+                print(
+                    f"{trader.symbol} at ${price:,.2f} ({trader.market_source})\n"
+                    f"Cash: ${trader.capital:,.2f} | Position: {trader.position:.8f}\n"
+                    f"Portfolio: ${value:,.2f} | Realized P&L: ${trader.pnl:,.2f}\n"
+                    f"Trades: {trader.trade_count} | Max drawdown: {trader.max_drawdown:.2%}"
+                )
+            elif command == "history":
+                if not trader.trade_history:
+                    print("No paper trades recorded.")
+                else:
+                    for trade in trader.trade_history[-10:]:
+                        timestamp = time.strftime(
+                            "%Y-%m-%d %H:%M:%S",
+                            time.localtime(float(trade["timestamp"])),
+                        )
+                        print(
+                            f"{timestamp} {trade['action']} {trade['units']:.8f} "
+                            f"{trader.symbol} at ${trade['price']:,.2f} — "
+                            f"{trade['reason']}"
+                        )
+            else:
+                print(f"Unknown command: {command}. Type 'help' for available commands.")
+        except (ValueError, RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            print(f"Error: {exc}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Interactive terminal paper trader using public Kraken quotes."
+    )
+    parser.add_argument("--symbol", default="BTC/USD", help="Market symbol, e.g. BTC/USD")
+    parser.add_argument("--capital", type=float, default=10_000.0, help="Starting paper cash")
+    args = parser.parse_args()
+    symbol = args.symbol.upper()
+    if (
+        symbol.count("/") != 1
+        or not all(part.isalnum() for part in symbol.split("/"))
+    ):
+        parser.error("--symbol must use BASE/QUOTE format, for example BTC/USD")
+
+    trader = ApexAITrader(symbol=symbol, capital=args.capital)
+    try:
+        asyncio.run(terminal_session(trader))
+    except KeyboardInterrupt:
+        print("\nExiting.")
+
+
+if __name__ == "__main__":
+    main()

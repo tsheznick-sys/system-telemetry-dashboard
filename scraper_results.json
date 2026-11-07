@@ -1,0 +1,26 @@
+[
+    {
+        "url": "https://api.telemetry-node-1.io/status",
+        "cpu_load": "71%",
+        "memory_load": "69%",
+        "indexed_at": 5126.490369458
+    },
+    {
+        "url": "https://api.telemetry-node-2.io/status",
+        "cpu_load": "85%",
+        "memory_load": "48%",
+        "indexed_at": 5126.490502136
+    },
+    {
+        "url": "https://api.telemetry-node-3.io/status",
+        "cpu_load": "41%",
+        "memory_load": "67%",
+        "indexed_at": 5126.490572377
+    },
+    {
+        "url": "https://api.telemetry-node-4.io/status",
+        "cpu_load": "32%",
+        "memory_load": "86%",
+        "indexed_at": 5126.490632589
+    }
+]

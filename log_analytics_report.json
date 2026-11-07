@@ -1,0 +1,41 @@
+{
+    "total_records": 5,
+    "level_breakdown": {
+        "INFO": 2,
+        "WARNING": 1,
+        "ERROR": 1,
+        "CRITICAL": 1
+    },
+    "records": [
+        {
+            "timestamp": "2026-11-05 14:01:22",
+            "level": "INFO",
+            "module": "CORE_NODE",
+            "message": "System heartbeat established successfully."
+        },
+        {
+            "timestamp": "2026-11-05 14:01:25",
+            "level": "WARNING",
+            "module": "AUTH_SERVICE",
+            "message": "High latency detected on token verification: 450ms."
+        },
+        {
+            "timestamp": "2026-11-05 14:01:28",
+            "level": "ERROR",
+            "module": "DB_POOL",
+            "message": "Connection refused on endpoint 127.0.0.1:5432."
+        },
+        {
+            "timestamp": "2026-11-05 14:01:30",
+            "level": "INFO",
+            "module": "CORE_NODE",
+            "message": "Telemetry stream synchronized."
+        },
+        {
+            "timestamp": "2026-11-05 14:01:35",
+            "level": "CRITICAL",
+            "module": "PAYMENT_GW",
+            "message": "Gateway timeout during transaction settlement."
+        }
+    ]
+}

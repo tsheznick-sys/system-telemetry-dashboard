@@ -1,0 +1,154 @@
+import asyncio
+import logging
+import random
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+from pydantic import BaseModel, Field
+import uvicorn
+from fastapi import FastAPI, BackgroundTasks, status
+from fastapi.responses import JSONResponse, Response
+from faker import Faker
+
+# Initialize application and logger
+app = FastAPI(
+    title="Numinous AI Telephony & Voice Gateway",
+    version="3.0.0",
+    description="Autonomous webhook processing and call telemetry engine for AI voice agents."
+)
+fake = Faker()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [VOICE_GATEWAY] %(message)s"
+)
+
+# In-memory storage for active call states and logs
+ACTIVE_CALLS: Dict[str, dict] = {}
+CALL_HISTORY: List[dict] = []
+
+
+@app.get("/", tags=["status"])
+async def gateway_home():
+    """Provide a landing response when the gateway URL is opened in a browser."""
+    return {
+        "service": app.title,
+        "status": "online",
+        "docs": "/docs",
+        "active_calls": "/telemetry/active-calls",
+        "inbound_webhook": "/webhook/voice/inbound",
+        "outbound_dispatch": "/agent/dispatch",
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Avoid a not-found response for browsers requesting a site icon."""
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# Pydantic Data Models for Webhook Validation
+class CallWebhookPayload(BaseModel):
+    call_id: str = Field(..., description="Unique telephony session identifier")
+    caller_phone: str = Field(..., description="Customer phone number")
+    agent_id: str = Field(..., description="Assigned AI voice model ID")
+    transcript_snippet: Optional[str] = Field(None, description="Latest speech-to-text transcription chunk")
+    duration_seconds: int = Field(..., ge=0)
+
+class AgentTriggerRequest(BaseModel):
+    customer_name: str
+    intent_topic: str
+    priority: str = "normal"
+
+
+# Background worker simulating real-time call sentiment analysis and CRM logging
+async def process_call_analytics(call_id: str):
+    """Simulates asynchronous post-call data extraction, sentiment scoring, and CRM sync."""
+    logging.info(f"[ANALYTICS] Starting deep NLP pipeline for call session {call_id}...")
+    await asyncio.sleep(4.0)  # Simulate LLM inference delay
+    
+    sentiments = ["POSITIVE", "NEUTRAL", "HIGH_INTENT_LEAD", "ESCALATE_TO_HUMAN"]
+    assigned_sentiment = random.choice(sentiments)
+
+    if call_id in ACTIVE_CALLS:
+        ACTIVE_CALLS[call_id]["sentiment"] = assigned_sentiment
+        ACTIVE_CALLS[call_id]["status"] = "COMPLETED"
+        CALL_HISTORY.append(ACTIVE_CALLS[call_id])
+        logging.info(f"[ANALYTICS] Call {call_id} processed successfully. Sentiment: {assigned_sentiment}")
+
+
+@app.post("/webhook/voice/inbound", status_code=status.HTTP_200_OK)
+async def handle_inbound_voice_webhook(payload: CallWebhookPayload, background_tasks: BackgroundTasks):
+    """
+    Inbound webhook receiver for telephony service providers (e.g., Twilio / Retell AI).
+    """
+    logging.info(f"[INBOUND] Received call event | ID: {payload.call_id} | Caller: {payload.caller_phone}")
+
+    call_record = {
+        "call_id": payload.call_id,
+        "caller_phone": payload.caller_phone,
+        "agent_id": payload.agent_id,
+        "duration": payload.duration_seconds,
+        "latest_text": payload.transcript_snippet or "No speech detected yet.",
+        "status": "IN_PROGRESS",
+        "sentiment": "PENDING",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+    ACTIVE_CALLS[payload.call_id] = call_record
+    
+    # Trigger background telemetry analysis once the call wraps up
+    background_tasks.add_task(process_call_analytics, payload.call_id)
+    
+    return JSONResponse(
+        content={
+            "status": "success",
+            "message": f"Call session {payload.call_id} registered and queued for telemetry tracking.",
+            "response_action": "CONTINUE_CONVERSATION"
+        }
+    )
+
+# Telemetry Payload Generator
+@app.post("/agent/dispatch", status_code=status.HTTP_201_CREATED)
+async def dispatch_outbound_agent(request: AgentTriggerRequest):
+    """
+    Triggers an outbound AI voice agent call simulation.
+    """
+    simulated_call_id = f"CALL_{random.randint(10000, 99999)}"
+    target_phone = fake.phone_number()
+    
+    logging.info(f"[DISPATCH] Launching AI voice agent for {request.customer_name} regarding '{request.intent_topic}'")
+    
+    dispatch_record = {
+        "call_id": simulated_call_id,
+        "customer": request.customer_name,
+        "phone": target_phone,
+        "intent": request.intent_topic,
+        "priority": request.priority,
+        "status": "DIALING",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    ACTIVE_CALLS[simulated_call_id] = dispatch_record
+    
+    return {
+        "status": "dispatched",
+        "call_id": simulated_call_id,
+        "assigned_node": f"VOICE_CLUSTER_NODE_{random.randint(1, 8)}",
+        "target_number": target_phone
+    }
+
+# Telemetry Endpoint for Active Call Metrics
+@app.get("/telemetry/active-calls", status_code=status.HTTP_200_OK)
+async def get_active_telemetry():
+    """Returns real-time active call nodes and telemetry metrics."""
+    return {
+        "active_sessions_count": len(ACTIVE_CALLS),
+        "total_historical_calls": len(CALL_HISTORY),
+        "system_status": "OPTIMAL",
+        "active_calls": ACTIVE_CALLS
+    }
+
+if __name__ == "__main__":
+    print("=== STARTING NUMINOUS AI TELEPHONY GATEWAY ===")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
