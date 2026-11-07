@@ -1,41 +1,37 @@
-import asyncio
-import time
+import numpy as np
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [TOKEN_BUCKET] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [KALMAN_FILTER] %(message)s")
 
-class AsyncTokenBucket:
-    def __init__(self, capacity: int = 5, refill_rate: float = 2.0):
-        self.capacity = float(capacity)
-        self.tokens = float(capacity)
-        self.refill_rate = refill_rate
-        self.last_refill = time.time()
-        self.lock = asyncio.Lock()
+class KalmanFilter1D:
+    def __init__(self, process_variance: float = 1e-5, measurement_variance: float = 0.1):
+        self.q = process_variance
+        self.r = measurement_variance
+        self.x = 0.0 # Estimated state
+        self.p = 1.0 # Estimation error covariance
 
-    async def acquire(self) -> bool:
-        async with self.lock:
-            now = time.time()
-            elapsed = now - self.last_refill
-            self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
-            self.last_refill = now
+    def update(self, measurement: float) -> float:
+        # Prediction step
+        # x = x, p = p + q
+        self.p += self.q
 
-            if self.tokens >= 1.0:
-                self.tokens -= 1.0
-                return True
-            return False
+        # Measurement update step
+        k = self.p / (self.p + self.r) # Kalman gain
+        self.x += k * (measurement - self.x)
+        self.p *= (1 - k)
 
-async def client_request_simulator(client_id: str, bucket: AsyncTokenBucket):
-    for i in range(1, 6):
-        allowed = await bucket.acquire()
-        status = "ALLOWED (200 OK)" if allowed else "THROTTLED (429 Too Many Requests)"
-        logging.info(f"Client {client_id} request #{i} -> {status}")
-        await asyncio.sleep(0.3)
-
-async def main():
-    bucket = AsyncTokenBucket(capacity=3, refill_rate=2.0)
-    clients = [client_request_simulator(f"USR_{i:02d}", bucket) for i in range(1, 4)]
-    await asyncio.gather(*clients)
+        return self.x
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    kf = KalmanFilter1D()
+    np.random.seed(42)
     
+    true_signal = 50.0
+    logging.info("Running Kalman Filter noise reduction simulation...")
+    
+    for i in range(1, 11):
+        # Add random sensor noise to the true signal
+        noisy_measurement = true_signal + np.random.normal(0, 2.5)
+        filtered_estimate = kf.update(noisy_measurement)
+        logging.info(f"Step {i:02d} | Raw Measurement: {noisy_measurement:+.2f} | Filtered Estimate: {filtered_estimate:+.2f}")
+        
