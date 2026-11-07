@@ -1,0 +1,49 @@
+import asyncio
+import json
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [JSON_RPC] %(message)s")
+
+async def handle_rpc_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    addr = writer.get_extra_info('peername')
+    logging.info(f"RPC connection established from {addr}")
+    
+    try:
+        while True:
+            data = await reader.readline()
+            if not data:
+                break
+            
+            request = json.loads(data.decode())
+            method = request.get("method")
+            params = request.get("params", {})
+            req_id = request.get("id", 1)
+
+            logging.info(f"Executing RPC method '{method}' with params {params}")
+            
+            if method == "get_node_metrics":
+                result = {"cpu_load": 38.5, "memory": 62.1, "status": "OPTIMAL"}
+                response = {"jsonrpc": "2.0", "result": result, "id": req_id}
+            else:
+                response = {"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": req_id}
+
+            writer.write((json.dumps(response) + "\n").encode())
+            await writer.drain()
+    except Exception as e:
+        logging.error(f"RPC error: {e}")
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+async def main():
+    server = await asyncio.start_server(handle_rpc_client, "127.0.0.1", 9090)
+    logging.info("JSON-RPC server active on 127.0.0.1:9090")
+    
+    async with server:
+        # Run server briefly for demonstration
+        await asyncio.sleep(2.0)
+        server.close()
+        await server.wait_closed()
+
+if __name__ == "__main__":
+    asyncio.run(main())
