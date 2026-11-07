@@ -1,0 +1,33 @@
+import logging
+from typing import Dict, List
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [VECTOR_CLOCK] %(message)s")
+
+class VectorClock:
+    def __init__(self, node_id: str, cluster_nodes: List[str]):
+        self.node_id = node_id
+        self.clock: Dict[str, int] = {node: 0 for node in cluster_nodes}
+
+    def internal_event(self):
+        self.clock[self.node_id] += 1
+        logging.info(f"[{self.node_id}] Internal event. Clock updated: {self.clock}")
+
+    def send_event(self) -> Dict[str, int]:
+        self.clock[self.node_id] += 1
+        logging.info(f"[{self.node_id}] Sending message. Outbound clock: {self.clock}")
+        return self.clock.copy()
+
+    def receive_event(self, incoming_clock: Dict[str, int]):
+        for node in self.clock:
+            self.clock[node] = max(self.clock.get(node, 0), incoming_clock.get(node, 0))
+        self.clock[self.node_id] += 1
+        logging.info(f"[{self.node_id}] Received message. Merged clock: {self.clock}")
+
+if __name__ == "__main__":
+    nodes = ["NODE_A", "NODE_B", "NODE_C"]
+    vc_a = VectorClock("NODE_A", nodes)
+    vc_b = VectorClock("NODE_B", nodes)
+
+    vc_a.internal_event()
+    msg = vc_a.send_event()
+    vc_b.receive_event(msg)

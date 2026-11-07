@@ -1,26 +1,26 @@
 [
     {
         "url": "https://api.telemetry-node-1.io/status",
-        "cpu_load": "71%",
-        "memory_load": "69%",
-        "indexed_at": 5126.490369458
+        "cpu_load": "18%",
+        "memory_load": "62%",
+        "indexed_at": 1657.219753534
     },
     {
         "url": "https://api.telemetry-node-2.io/status",
-        "cpu_load": "85%",
-        "memory_load": "48%",
-        "indexed_at": 5126.490502136
+        "cpu_load": "84%",
+        "memory_load": "78%",
+        "indexed_at": 1657.219918861
     },
     {
         "url": "https://api.telemetry-node-3.io/status",
-        "cpu_load": "41%",
-        "memory_load": "67%",
-        "indexed_at": 5126.490572377
+        "cpu_load": "80%",
+        "memory_load": "45%",
+        "indexed_at": 1657.219959501
     },
     {
         "url": "https://api.telemetry-node-4.io/status",
-        "cpu_load": "32%",
-        "memory_load": "86%",
-        "indexed_at": 5126.490632589
+        "cpu_load": "66%",
+        "memory_load": "51%",
+        "indexed_at": 1657.219991319
     }
 ]
