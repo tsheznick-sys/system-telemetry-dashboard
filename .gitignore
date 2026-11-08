@@ -1,4 +1,12 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
+# Dependencies
+.psci_modules
+.spago
+bower_components
+node_modules
+dist/
+.env
+coverage/
+
+# Generated files
+.psci
+output
