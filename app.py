@@ -565,18 +565,43 @@ def _render_dashboard(
                 y=[value_getter(sample) for sample in history],
                 mode="lines+markers",
                 name=label,
-                line={"color": color, "width": 2},
+                line={"color": color, "width": 2.4},
+                marker={"size": 5, "opacity": 0.9},
+                fill="tozeroy",
+                fillcolor="rgba(0, 242, 255, 0.07)" if label.startswith("CPU") else "rgba(255, 0, 85, 0.07)",
+                hovertemplate="%{x} · " + label + " %{y:.1f}%<extra></extra>",
             )
         )
     chart.update_layout(
         template="plotly_dark",
-        margin={"l": 20, "r": 20, "t": 20, "b": 20},
-        height=320,
+        margin={"l": 24, "r": 16, "t": 34, "b": 24},
+        height=340,
+        hovermode="x unified",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        xaxis={"showgrid": False, "title": "Sample time"},
-        yaxis={"range": [0, 100], "gridcolor": "#222222", "title": "Utilization (%)"},
-        legend={"orientation": "h", "y": 1.12},
+        font={"family": "Inter, ui-sans-serif, system-ui, sans-serif", "color": "#c6d3e2", "size": 12},
+        xaxis={
+            "showgrid": False,
+            "title": {"text": "Sample time", "font": {"size": 11, "color": "#8b9bb0"}},
+            "zeroline": False,
+            "showspikes": True,
+            "spikethickness": 1,
+            "spikecolor": "rgba(148, 184, 220, 0.35)",
+        },
+        yaxis={
+            "range": [0, 100],
+            "gridcolor": "rgba(148, 184, 220, 0.10)",
+            "zeroline": False,
+            "title": {"text": "Utilization (%)", "font": {"size": 11, "color": "#8b9bb0"}},
+            "ticksuffix": "%",
+        },
+        legend={
+            "orientation": "h",
+            "y": 1.18,
+            "x": 0,
+            "bgcolor": "rgba(0,0,0,0)",
+            "font": {"size": 11, "color": "#aab8c8"},
+        },
     )
     connection_text = (
         str(current.active_connections)
@@ -709,11 +734,22 @@ def update_refresh_interval(seconds: int) -> float:
 
 
 with gr.Blocks(title="Ghost Telemetry Engine v4.0") as demo:
-    gr.Markdown(
+    gr.HTML(
         """
-        # ⚡ GHOST TELEMETRY ENGINE <span style="color:#22d3ee">/ 4.0</span>
-        Live host diagnostics · Durable history · Operational simulation profiles
-        · [Calculator](/gradio_api/calculator)
+        <div class="gh-topbar">
+          <div class="gh-brand">
+            <div class="gh-mark" aria-hidden="true">⚡</div>
+            <div class="gh-titles">
+              <div class="gh-title">GHOST TELEMETRY <span>/ 4.0</span></div>
+              <div class="gh-sub">Live host diagnostics · Durable history · Operational simulation profiles</div>
+            </div>
+          </div>
+          <div class="gh-actions">
+            <span class="gh-pill"><span class="gh-dot"></span>LIVE</span>
+            <a class="gh-link" href="/gradio_api/calculator">Calculator →</a>
+            <a class="gh-link" href="/api/v1/openapi.json">API →</a>
+          </div>
+        </div>
         """
     )
     with gr.Row():
@@ -810,6 +846,16 @@ with gr.Blocks(title="Ghost Telemetry Engine v4.0") as demo:
         queue=False,
     )
     demo.load(get_telemetry, inputs=inputs, outputs=outputs)
+    gr.HTML(
+        """
+        <div class="gh-footer">
+          Ghost Telemetry Engine v4.0 · self-hosted diagnostics ·
+          <a href="/gradio_api/calculator">Calculator</a> ·
+          <a href="/api/v1/openapi.json">OpenAPI schema</a> ·
+          seeded, self-verifying simulations in <code>modules/</code> + <code>advanced_modules/</code>
+        </div>
+        """
+    )
     with gr.Accordion("Public Web Research", open=False):
         gr.Markdown(
             "Fetch up to five public HTTPS pages. Requests are limited to public "
@@ -836,17 +882,240 @@ with gr.Blocks(title="Ghost Telemetry Engine v4.0") as demo:
 
 
 custom_css = """
-body, .gradio-container { background-color: #05070a !important; }
-.gradio-container { color: #e5e7eb !important; }
-.control-panel, .telemetry-panel {
-    border: 1px solid #1a2633;
-    background: #0a1018;
-    padding: 14px;
-    border-radius: 12px;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --gh-bg: #05080d;
+    --gh-panel: rgba(13, 19, 29, 0.86);
+    --gh-panel-solid: #0d131d;
+    --gh-panel-raised: #111927;
+    --gh-border: rgba(148, 184, 220, 0.14);
+    --gh-border-strong: rgba(148, 184, 220, 0.24);
+    --gh-text: #e6edf6;
+    --gh-muted: #8b9bb0;
+    --gh-accent: #22d3ee;
+    --gh-accent-strong: #06b6d4;
+    --gh-accent-deep: #0891b2;
+    --gh-ok: #34d399;
+    --gh-warn: #ffb45c;
+    --gh-danger: #ff5c7a;
+    --gh-gold: #c9a227;
+    --gh-radius: 16px;
+    --gh-radius-sm: 12px;
+    --gh-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+    --gh-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
-button.primary {
-    background: linear-gradient(90deg, #0891b2, #06b6d4) !important;
+
+*:focus-visible {
+    outline: 2px solid var(--gh-accent) !important;
+    outline-offset: 2px !important;
+    border-radius: 6px;
+}
+
+body, .gradio-container {
+    background:
+        radial-gradient(1100px 520px at 12% -10%, rgba(34, 211, 238, 0.10), transparent 60%),
+        radial-gradient(900px 520px at 105% 110%, rgba(8, 145, 178, 0.12), transparent 55%),
+        var(--gh-bg) !important;
+    color: var(--gh-text) !important;
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif !important;
+}
+.gradio-container {
+    max-width: 1480px !important;
+    margin: 0 auto !important;
+    padding: 18px 26px 44px !important;
+}
+
+/* ---------- Brand header ---------- */
+.gh-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 14px 20px;
+    border: 1px solid var(--gh-border);
+    border-radius: var(--gh-radius);
+    background: linear-gradient(180deg, rgba(17, 25, 39, 0.9), rgba(13, 19, 29, 0.9));
+    box-shadow: var(--gh-shadow);
+    backdrop-filter: blur(14px);
+    margin-bottom: 18px;
+}
+.gh-brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.gh-mark {
+    display: grid;
+    width: 46px; height: 46px;
+    place-items: center;
+    border-radius: 14px;
+    font-size: 24px;
+    color: #06121a;
+    background: linear-gradient(135deg, #67e8f9 0%, #22d3ee 45%, #0891b2 100%);
+    box-shadow: 0 8px 26px rgba(34, 211, 238, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.gh-title {
+    font-size: clamp(19px, 2.3vw, 26px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #f2f7fd;
+    white-space: nowrap;
+}
+.gh-title span { color: var(--gh-accent); font-weight: 650; }
+.gh-sub { color: var(--gh-muted); font-size: 12.5px; margin-top: 2px; }
+.gh-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.gh-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.14em;
+    color: #052019;
+    background: linear-gradient(180deg, #4ade9c, #22c55e);
+    box-shadow: 0 0 18px rgba(52, 211, 153, 0.4);
+}
+.gh-dot { width: 8px; height: 8px; border-radius: 50%; background: #052e1c; animation: gh-pulse 1.6s ease-in-out infinite; }
+@keyframes gh-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.gh-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--gh-border-strong);
+    border-radius: 999px;
+    color: #cfe3f5; text-decoration: none;
+    font-size: 12.5px; font-weight: 600;
+    transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+.gh-link:hover { border-color: var(--gh-accent); color: #ffffff; background: rgba(34, 211, 238, 0.08); }
+.gh-footer {
+    margin-top: 20px;
+    padding: 14px 6px 0;
+    border-top: 1px solid var(--gh-border);
+    color: var(--gh-muted);
+    font-size: 12px;
+    text-align: center;
+}
+.gh-footer a { color: #9adfef; text-decoration: none; }
+.gh-footer a:hover { text-decoration: underline; }
+
+/* ---------- Panels ---------- */
+.control-panel, .telemetry-panel {
+    border: 1px solid var(--gh-border) !important;
+    background: var(--gh-panel) !important;
+    padding: 18px !important;
+    border-radius: var(--gh-radius) !important;
+    box-shadow: var(--gh-shadow);
+    backdrop-filter: blur(14px);
+}
+.control-panel h3, .telemetry-panel h3 {
+    margin-top: 0 !important;
+    font-size: 15px !important;
+    font-weight: 650 !important;
+    letter-spacing: 0.01em;
+    color: #eaf2fb !important;
+    border-bottom: 1px solid var(--gh-border);
+    padding-bottom: 10px;
+}
+
+/* ---------- KPI number boxes ---------- */
+.gradio-number input, input[type='number'] {
+    font-variant-numeric: tabular-nums !important;
+    font-family: var(--gh-mono) !important;
+    font-size: 22px !important;
+    font-weight: 500 !important;
+    letter-spacing: -0.02em !important;
+    color: #f0f6fd !important;
+    background: var(--gh-panel-raised) !important;
+    border: 1px solid var(--gh-border) !important;
+    border-radius: var(--gh-radius-sm) !important;
+}
+.gradio-number label span, .gradio-slider label span, .gradio-radio label span {
+    color: var(--gh-muted) !important;
+    font-size: 11px !important;
+    font-weight: 650 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+}
+
+/* ---------- Sliders & radios ---------- */
+input[type='range'] { accent-color: var(--gh-accent-strong); }
+.gradio-radio fieldset, .gradio-dropdown, .gradio-textbox {
+    border-radius: var(--gh-radius-sm) !important;
+}
+.gradio-radio label { transition: border-color 150ms ease, background 150ms ease; border-radius: 10px !important; }
+.gradio-radio label:hover { background: rgba(34, 211, 238, 0.06); }
+
+/* ---------- Buttons ---------- */
+button.primary, button.gr-button-primary {
+    background: linear-gradient(135deg, #67e8f9 0%, #22d3ee 45%, #0891b2 100%) !important;
     border: 0 !important;
+    color: #05131c !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.02em !important;
+    border-radius: var(--gh-radius-sm) !important;
+    box-shadow: 0 10px 30px rgba(34, 211, 238, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.55) !important;
+    transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease !important;
+}
+button.primary:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 14px 36px rgba(34, 211, 238, 0.36), inset 0 1px 0 rgba(255,255,255,0.55) !important; }
+button.primary:active { transform: translateY(0); }
+
+/* ---------- Markdown / prose (summary) ---------- */
+.gradio-markdown, .prose { color: var(--gh-text) !important; }
+.gradio-markdown h1, .prose h1 {
+    font-size: 22px !important; letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #f2f7fd, #9adcff);
+    -webkit-background-clip: text; background-clip: text; color: transparent !important;
+}
+.gradio-markdown h3, .prose h3 { color: #d7e6f5 !important; border-bottom: 1px solid var(--gh-border); padding-bottom: 6px; }
+.gradio-markdown table, .prose table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 10px 0 14px;
+    border: 1px solid var(--gh-border);
+    border-radius: var(--gh-radius-sm);
+    overflow: hidden;
+    font-variant-numeric: tabular-nums;
+}
+.gradio-markdown th, .prose th {
+    background: rgba(34, 211, 238, 0.08) !important;
+    color: #a9ecfb !important;
+    font-size: 10.5px !important;
+    text-transform: uppercase; letter-spacing: 0.09em;
+    padding: 8px 10px !important;
+    border-bottom: 1px solid var(--gh-border-strong) !important;
+    text-align: left !important;
+}
+.gradio-markdown td, .prose td {
+    padding: 8px 10px !important;
+    border-bottom: 1px solid rgba(148, 184, 220, 0.08) !important;
+}
+.gradio-markdown tr:nth-child(even) td, .prose tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
+.gradio-markdown code, .prose code {
+    background: rgba(34, 211, 238, 0.09) !important;
+    color: #8be9ff !important;
+    border-radius: 6px;
+    padding: 1px 6px;
+    font-family: var(--gh-mono) !important;
+    font-size: 0.86em;
+}
+.gradio-markdown strong, .prose strong { color: #ffffff !important; }
+
+/* ---------- Plot & console ---------- */
+.gradio-plot, .gradio-plot > div { border-radius: var(--gh-radius-sm) !important; overflow: hidden; }
+textarea, .gradio-textbox textarea {
+    font-family: var(--gh-mono) !important;
+    font-size: 12.5px !important;
+    line-height: 1.55 !important;
+    background: #070c14 !important;
+    border: 1px solid var(--gh-border) !important;
+    border-radius: var(--gh-radius-sm) !important;
+    color: #b9f3ff !important;
+}
+
+/* ---------- Scrollbars ---------- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(148, 184, 220, 0.22); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(148, 184, 220, 0.36); }
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 """
 
@@ -857,7 +1126,7 @@ if __name__ == "__main__":
         server_port=7860,
         ssr_mode=True,
         _app=app,
-        theme=gr.themes.Monochrome(),
+        theme=gr.themes.Base(primary_hue="cyan", neutral_hue="slate", font=["Inter", "ui-sans-serif", "system-ui", "sans-serif"], font_mono=["JetBrains Mono", "ui-monospace", "monospace"]),
         css=custom_css,
         footer_links=["api", "gradio"],
     )

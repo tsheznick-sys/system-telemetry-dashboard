@@ -155,16 +155,67 @@ class TelemetryApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const seed = Color(0xFF12C8C0);
+    const surface = Color(0xFF0B1119);
+    const panel = Color(0xFF111927);
+    const panelHigh = Color(0xFF17222F);
+    final scheme = ColorScheme.fromSeed(
+      seedColor: seed,
+      brightness: Brightness.dark,
+    ).copyWith(
+      surface: surface,
+      surfaceContainerLowest: const Color(0xFF080D14),
+      surfaceContainerLow: panel,
+      surfaceContainer: panel,
+      surfaceContainerHigh: panelHigh,
+      surfaceContainerHighest: const Color(0xFF1E2B3D),
+      onSurface: const Color(0xFFE6EDF6),
+      onSurfaceVariant: const Color(0xFF8B9BB0),
+      outlineVariant: const Color(0x22FFFFFF),
+    );
     return MaterialApp(
       title: 'System Telemetry',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: seed,
-          brightness: Brightness.dark,
-        ),
-        scaffoldBackgroundColor: const Color(0xFF0B1119),
+        colorScheme: scheme,
+        scaffoldBackgroundColor: surface,
         useMaterial3: true,
+        textTheme: const TextTheme().apply(
+          bodyColor: const Color(0xFFE6EDF6),
+          displayColor: const Color(0xFFF2F7FD),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0B1119),
+          foregroundColor: Color(0xFFF2F7FD),
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          centerTitle: false,
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: seed,
+            foregroundColor: const Color(0xFF05131C),
+            textStyle: const TextStyle(fontWeight: FontWeight.w700),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: panelHigh,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0x14FFFFFF)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: seed, width: 1.6),
+          ),
+        ),
+        dividerTheme: const DividerThemeData(
+          color: Color(0x14FFFFFF),
+          thickness: 1,
+        ),
       ),
       home: const TelemetryHomePage(),
     );

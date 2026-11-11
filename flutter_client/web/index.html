@@ -1,15 +1,59 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <base href="$FLUTTER_BASE_HREF">
     <meta charset="UTF-8">
     <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-    <meta name="description" content="Cross-platform system telemetry dashboard.">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Ghost Telemetry 4.0 — live host diagnostics, durable history and operational simulation profiles across mobile, web and desktop.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#0b1119">
+    <meta name="color-scheme" content="dark">
     <title>Ghost Telemetry 4.0</title>
+    <style>
+      /* Avoid a white flash before the Flutter engine paints. */
+      html, body {
+        margin: 0;
+        background: #0b1119;
+        color-scheme: dark;
+      }
+      #gh-boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(720px 420px at 50% -10%, rgba(18, 200, 192, 0.12), transparent 60%),
+          #0b1119;
+        transition: opacity 240ms ease;
+        z-index: 0;
+      }
+      #gh-boot .mark {
+        width: 54px;
+        height: 54px;
+        border-radius: 14px;
+        background: linear-gradient(135deg, #67e8f9 0%, #12c8c0 55%, #0891b2 100%);
+        box-shadow: 0 10px 34px rgba(18, 200, 192, 0.35);
+        animation: gh-boot-pulse 1.4s ease-in-out infinite;
+      }
+      @keyframes gh-boot-pulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(0.92); opacity: 0.72; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #gh-boot .mark { animation: none; }
+      }
+    </style>
   </head>
   <body>
+    <div id="gh-boot" aria-hidden="true"><div class="mark"></div></div>
+    <script>
+      window.addEventListener('flutter-first-frame', function () {
+        var boot = document.getElementById('gh-boot');
+        if (!boot) return;
+        boot.style.opacity = '0';
+        setTimeout(function () { boot.remove(); }, 260);
+      });
+    </script>
     <script src="flutter_bootstrap.js" async></script>
   </body>
 </html>
